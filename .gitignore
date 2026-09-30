@@ -1,0 +1,8 @@
+/target
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.noesora/
