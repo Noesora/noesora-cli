@@ -97,3 +97,55 @@ fn status_without_vault_json_failure() {
     assert_eq!(payload["ok"], false);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn note_writes_markdown_in_vault() {
+    let root = temp_dir();
+    let init = bin()
+        .args(["init", "--json"])
+        .current_dir(&root)
+        .output()
+        .expect("init");
+    assert_ok(&init, "init");
+    let note = bin()
+        .args([
+            "note",
+            "--json",
+            "--title",
+            "Retry billing",
+            "--file",
+            "src/billing.rs",
+            "Keep credits on the workspace.",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("note");
+    assert_ok(&note, "note");
+    let payload: serde_json::Value = serde_json::from_slice(&note.stdout).expect("json");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "note");
+    let path = PathBuf::from(payload["path"].as_str().unwrap());
+    let text = fs::read_to_string(&path).expect("read note");
+    assert!(text.contains("schema: noesora.record/v1"));
+    assert!(text.contains("type: note"));
+    assert!(text.contains("Keep credits on the workspace."));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn note_without_title_flag_fails_parse() {
+    let root = temp_dir();
+    let init = bin()
+        .args(["init", "--json"])
+        .current_dir(&root)
+        .output()
+        .expect("init");
+    assert_ok(&init, "init");
+    let note = bin()
+        .args(["note", "--json"])
+        .current_dir(&root)
+        .output()
+        .expect("note");
+    assert!(!note.status.success());
+    let _ = fs::remove_dir_all(root);
+}

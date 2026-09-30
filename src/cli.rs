@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use noesora_engine::record::{self, RecordError, RecordStatus};
 use noesora_engine::vault::{self, VaultError};
 use serde::Serialize;
 
@@ -30,6 +31,20 @@ enum Command {
     },
     /// Show the nearest vault.
     Status,
+    /// Write a durable note into the vault.
+    Note {
+        /// One-line title (required).
+        #[arg(long)]
+        title: String,
+        /// open, done, or blocked.
+        #[arg(long, default_value = "open")]
+        status: String,
+        /// Paths this note is about.
+        #[arg(long = "file")]
+        files: Vec<String>,
+        /// Note body.
+        body: Vec<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -46,6 +61,15 @@ struct OkStatus {
     vault: String,
     version: u32,
     created_at: String,
+}
+
+#[derive(Serialize)]
+struct OkNote {
+    ok: bool,
+    command: &'static str,
+    id: String,
+    path: String,
+    vault: String,
 }
 
 #[derive(Serialize)]
@@ -99,6 +123,28 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Note {
+            title,
+            status,
+            files,
+            body,
+        }) => match note(title, status, files, body) {
+            Ok(written) => {
+                emit_ok(
+                    json,
+                    OkNote {
+                        ok: true,
+                        command: "note",
+                        id: written.id.clone(),
+                        path: written.path.display().to_string(),
+                        vault: written.vault.display().to_string(),
+                    },
+                    format!("Wrote note {} at {}", written.id, written.path.display()),
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json, err),
+        },
     }
 }
 
@@ -109,6 +155,16 @@ fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
     Ok((root, record))
 }
 
+fn note(
+    title: String,
+    status: String,
+    files: Vec<String>,
+    body: Vec<String>,
+) -> Result<record::WrittenNote, RecordError> {
+    let status = RecordStatus::parse(&status).ok_or(RecordError::InvalidStatus)?;
+    let cwd = std::env::current_dir().map_err(RecordError::from)?;
+    record::write_note(&cwd, &title, &body.join(" "), status, &files)
+}
 fn emit_ok<T: Serialize>(json: bool, payload: T, text: String) {
     if json {
         println!("{}", serde_json::to_string(&payload).expect("json"));
@@ -117,7 +173,7 @@ fn emit_ok<T: Serialize>(json: bool, payload: T, text: String) {
     }
 }
 
-fn fail(json: bool, err: VaultError) -> ExitCode {
+fn fail(json: bool, err: impl std::fmt::Display) -> ExitCode {
     if json {
         let payload = Fail {
             ok: false,
