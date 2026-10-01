@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_noesora"))
@@ -12,12 +15,10 @@ fn temp_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "noesora-cli-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&path).expect("temp");
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("noesora-cli-{}-{nanos}-{seq}", std::process::id()));
+    fs::create_dir(&path).expect("unique temp");
     path
 }
 
