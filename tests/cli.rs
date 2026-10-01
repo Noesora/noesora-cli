@@ -146,10 +146,20 @@ fn note_without_title_flag_fails_parse() {
         .expect("init");
     assert_ok(&init, "init");
     let note = bin()
-        .args(["note", "--json"])
+        .args(["--json", "note"])
         .current_dir(&root)
         .output()
         .expect("note");
-    assert!(!note.status.success());
+    assert_eq!(
+        note.status.code(),
+        Some(2),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&note.stdout),
+        String::from_utf8_lossy(&note.stderr)
+    );
+    assert!(!note.stdout.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&note.stdout).expect("json");
+    assert_eq!(payload["ok"], false);
+    assert!(payload["error"].as_str().is_some_and(|e| !e.is_empty()));
     let _ = fs::remove_dir_all(root);
 }

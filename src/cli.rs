@@ -79,7 +79,10 @@ struct Fail {
 }
 
 pub fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => return clap_error(err),
+    };
     let json = cli.json;
     match cli.command {
         None => {
@@ -171,6 +174,16 @@ fn emit_ok<T: Serialize>(json: bool, payload: T, text: String) {
     } else {
         println!("{text}");
     }
+}
+
+fn clap_error(err: clap::Error) -> ExitCode {
+    let json = std::env::args_os().any(|arg| arg == "--json");
+    if json && err.exit_code() != 0 {
+        return fail(true, err);
+    }
+    let code = err.exit_code();
+    let _ = err.print();
+    ExitCode::from(code as u8)
 }
 
 fn fail(json: bool, err: impl std::fmt::Display) -> ExitCode {
