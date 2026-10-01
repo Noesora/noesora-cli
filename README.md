@@ -11,11 +11,15 @@ cargo run -- note --title "Retry billing" Keep credits on the workspace.
 cargo run -- --json status
 cargo run -- search "credits"
 cargo run -- search "credits" --json
+cargo run -- query 'SELECT title, status FROM records'
+cargo run -- --json query 'SELECT count(*) AS total FROM records'
 ```
 
 With `--json`, command errors print `{ "ok": false, "error": "..." }` on stdout and exit with code 2.
 
 Search reads local records through the engine. A hit includes its record path, byte span, whole-file hash, and quoted source text. An unknown query returns an explicit `no_evidence` refusal in JSON.
+
+Query accepts one read-only `SELECT` or `WITH` statement. The engine refreshes its index from canonical records before reading. Text output is CSV with a header and at most 100 rows. A capped text result reports the limit on stderr; stdout stays CSV. `--json` returns `columns`, `rows` and `truncated`.
 
 Local checkout expects `../noesora-engine` next to this repo.
 

@@ -48,6 +48,8 @@ enum Command {
     },
     /// Search local records with citations or refuse when evidence is missing.
     Search { query: String },
+    /// Run one read-only SQL query against the local index.
+    Query { sql: String },
 }
 
 #[derive(Serialize)]
@@ -83,6 +85,15 @@ struct OkSearch {
     refused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct OkQuery {
+    ok: bool,
+    command: &'static str,
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -190,6 +201,36 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Query { sql }) => match query(&sql) {
+            Ok(result) => {
+                if json {
+                    let index::QueryResult {
+                        columns,
+                        rows,
+                        truncated,
+                    } = result;
+                    let payload = OkQuery {
+                        ok: true,
+                        command: "query",
+                        columns,
+                        rows,
+                        truncated,
+                    };
+                    println!("{}", serde_json::to_string(&payload).expect("json"));
+                } else {
+                    print!("{}", result.csv());
+                    if result.truncated {
+                        let _ = writeln!(
+                            io::stderr(),
+                            "noesora: result capped at {} rows",
+                            index::QUERY_ROW_CAP
+                        );
+                    }
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json, err),
+        },
     }
 }
 
@@ -197,6 +238,12 @@ fn search(query: &str) -> Result<SearchResult, IndexError> {
     let cwd = std::env::current_dir()?;
     let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
     index::search(&root, query)
+}
+
+fn query(sql: &str) -> Result<index::QueryResult, IndexError> {
+    let cwd = std::env::current_dir()?;
+    let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
+    index::query(&root, sql)
 }
 
 fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
