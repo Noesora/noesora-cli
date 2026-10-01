@@ -9,9 +9,13 @@ cargo run -- init
 cargo run -- status
 cargo run -- note --title "Retry billing" Keep credits on the workspace.
 cargo run -- --json status
+cargo run -- search "credits"
+cargo run -- search "credits" --json
 ```
 
 With `--json`, command errors print `{ "ok": false, "error": "..." }` on stdout and exit with code 2.
+
+Search reads local records through the engine. A hit includes its record path, byte span, whole-file hash, and quoted source text. An unknown query returns an explicit `no_evidence` refusal in JSON.
 
 Local checkout expects `../noesora-engine` next to this repo.
 

@@ -137,6 +137,67 @@ fn note_writes_markdown_in_vault() {
 }
 
 #[test]
+fn search_cites_local_record_and_refuses_unknown_query() {
+    let root = temp_dir();
+    let init = bin().arg("init").current_dir(&root).output().unwrap();
+    assert_ok(&init, "init");
+    let note = bin()
+        .args([
+            "note",
+            "--title",
+            "Café decision",
+            "Café credits stay local.",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&note, "note");
+
+    let found = bin()
+        .args(["search", "credits", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&found, "search hit");
+    let payload: serde_json::Value = serde_json::from_slice(&found.stdout).unwrap();
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["refused"], false);
+    let hit = &payload["hits"][0];
+    assert_eq!(hit["text"], "Café credits stay local.");
+    let path = hit["path"].as_str().unwrap();
+    let range = hit["span"].as_str().unwrap().strip_prefix('B').unwrap();
+    let (start, end) = range.split_once("-B").unwrap();
+    let source = fs::read_to_string(root.join(path)).unwrap();
+    assert_eq!(
+        source.get(start.parse::<usize>().unwrap()..end.parse::<usize>().unwrap()),
+        hit["text"].as_str()
+    );
+    let rendered = bin()
+        .args(["search", "credits"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&rendered, "search text");
+    let text = String::from_utf8(rendered.stdout).unwrap();
+    assert!(text.contains(path));
+    assert!(text.contains(hit["span"].as_str().unwrap()));
+    assert!(text.contains(hit["hash"].as_str().unwrap()));
+    assert!(text.contains("Café credits stay local."));
+
+    let missing = bin()
+        .args(["search", "unicorn", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&missing, "search refusal");
+    let payload: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(payload["hits"], serde_json::json!([]));
+    assert_eq!(payload["refused"], true);
+    assert_eq!(payload["reason"], "no_evidence");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn note_without_title_flag_fails_parse() {
     let root = temp_dir();
     let init = bin()
