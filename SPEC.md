@@ -38,7 +38,7 @@ T1|x|`init`/`status`/`note` text + runtime JSON via engine|I.cmd
 T2|x|clap parse errors honor `--json` failure contract|V1,I.cmd
 T3|x|`search` cited hit/refusal from engine in text + JSON|V2,V6,I.cmd
 T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
-T5|.|configure one global default vault for MCP|V7,I.cmd,I.file
+T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|.|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
 
 ## §B BUGS

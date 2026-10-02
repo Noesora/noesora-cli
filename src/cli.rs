@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use crate::config::{self, ConfigError};
 use clap::{CommandFactory, Parser, Subcommand};
 use noesora_engine::index::{self, IndexError, SearchResult};
 use noesora_engine::record::{self, RecordError, RecordStatus};
@@ -50,6 +51,20 @@ enum Command {
     Search { query: String },
     /// Run one read-only SQL query against the local index.
     Query { sql: String },
+    /// Manage the user-global default vault used by MCP.
+    Vault {
+        #[command(subcommand)]
+        action: VaultCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum VaultCommand {
+    /// Validate a vault and make it the global default for MCP.
+    Use {
+        /// Vault root (the directory holding `.noesora/vault.json`).
+        path: PathBuf,
+    },
 }
 
 #[derive(Serialize)]
@@ -94,6 +109,14 @@ struct OkQuery {
     columns: Vec<String>,
     rows: Vec<Vec<String>>,
     truncated: bool,
+}
+
+#[derive(Serialize)]
+struct OkVaultUse {
+    ok: bool,
+    command: &'static str,
+    vault: String,
+    config: String,
 }
 
 #[derive(Serialize)]
@@ -231,6 +254,24 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Vault {
+            action: VaultCommand::Use { path },
+        }) => match vault_use(&path) {
+            Ok((root, file)) => {
+                emit_ok(
+                    json,
+                    OkVaultUse {
+                        ok: true,
+                        command: "vault use",
+                        vault: root.display().to_string(),
+                        config: file.display().to_string(),
+                    },
+                    format!("Default vault set to {}", root.display()),
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json, err),
+        },
     }
 }
 
@@ -251,6 +292,10 @@ fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
     let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
     let record = vault::read_vault(&root)?;
     Ok((root, record))
+}
+
+fn vault_use(path: &std::path::Path) -> Result<(PathBuf, PathBuf), ConfigError> {
+    config::set_default_vault(&config::home_dir()?, path)
 }
 
 fn note(
