@@ -326,3 +326,178 @@ fn query_write_fails_as_json_without_changing_records() {
     assert_eq!(String::from_utf8(count.stdout).unwrap(), "total\n1\n");
     fs::remove_dir_all(root).unwrap();
 }
+
+/// CLI with an isolated home so tests never read or write the real `~/.noesora`.
+fn bin_home(home: &std::path::Path) -> Command {
+    let mut cmd = bin();
+    cmd.env("HOME", home).env_remove("USERPROFILE");
+    cmd
+}
+
+fn init_vault(root: &std::path::Path) {
+    fs::create_dir_all(root).unwrap();
+    assert_ok(
+        &bin().arg("init").current_dir(root).output().unwrap(),
+        "init",
+    );
+}
+
+fn json(out: &std::process::Output) -> serde_json::Value {
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+        panic!(
+            "stdout not json ({err}): {} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
+}
+
+fn config_json(home: &std::path::Path) -> serde_json::Value {
+    let text = fs::read_to_string(home.join(".noesora").join("config.json")).expect("config");
+    serde_json::from_str(&text).expect("config json")
+}
+
+#[test]
+fn vault_use_writes_absolute_default_and_status_keeps_nearest_cwd() {
+    let base = temp_dir();
+    let home = base.join("home");
+    fs::create_dir(&home).unwrap();
+    let default_vault = base.join("default");
+    let cwd_vault = base.join("project");
+    init_vault(&default_vault);
+    init_vault(&cwd_vault);
+
+    let out = bin_home(&home)
+        .args(["--json", "vault", "use", "default"])
+        .current_dir(&base)
+        .output()
+        .unwrap();
+    assert_ok(&out, "vault use");
+    let expected = fs::canonicalize(&default_vault).unwrap();
+    let payload = json(&out);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["vault"], expected.to_str().unwrap());
+    assert_eq!(
+        config_json(&home),
+        serde_json::json!({ "default_vault": expected.to_str().unwrap() })
+    );
+
+    // Interactive commands still resolve the nearest vault from cwd, not the default.
+    let status = bin_home(&home)
+        .args(["--json", "status"])
+        .current_dir(&cwd_vault)
+        .output()
+        .unwrap();
+    assert_ok(&status, "status");
+    assert_eq!(
+        json(&status)["vault"],
+        fs::canonicalize(&cwd_vault).unwrap().to_str().unwrap()
+    );
+    let note = bin_home(&home)
+        .args(["--json", "note", "--title", "Local", "stays in cwd vault"])
+        .current_dir(&cwd_vault)
+        .output()
+        .unwrap();
+    assert_ok(&note, "note");
+    assert_eq!(
+        json(&note)["vault"],
+        fs::canonicalize(&cwd_vault).unwrap().to_str().unwrap()
+    );
+    assert!(!default_vault.join("records").exists());
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn vault_use_replaces_previous_default_and_prints_text() {
+    let base = temp_dir();
+    let home = base.join("home");
+    let (first, second) = (base.join("a"), base.join("b"));
+    init_vault(&first);
+    init_vault(&second);
+    assert_ok(
+        &bin_home(&home)
+            .args(["vault", "use"])
+            .arg(&first)
+            .output()
+            .unwrap(),
+        "use first",
+    );
+    let out = bin_home(&home)
+        .args(["vault", "use"])
+        .arg(&second)
+        .output()
+        .unwrap();
+    assert_ok(&out, "use second");
+    let expected = fs::canonicalize(&second).unwrap();
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains(expected.to_str().unwrap()));
+    assert_eq!(
+        config_json(&home)["default_vault"],
+        expected.to_str().unwrap()
+    );
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn vault_use_rejects_invalid_targets_and_keeps_existing_config() {
+    let base = temp_dir();
+    let home = base.join("home");
+    let good = base.join("good");
+    init_vault(&good);
+    assert_ok(
+        &bin_home(&home)
+            .args(["vault", "use"])
+            .arg(&good)
+            .output()
+            .unwrap(),
+        "use good",
+    );
+    let before = config_json(&home);
+
+    let plain = base.join("plain");
+    fs::create_dir(&plain).unwrap();
+    let nested = good.join("src");
+    fs::create_dir(&nested).unwrap();
+    let corrupt = base.join("corrupt");
+    fs::create_dir_all(corrupt.join(".noesora")).unwrap();
+    fs::write(corrupt.join(".noesora").join("vault.json"), "{nope").unwrap();
+
+    for (target, needle) in [
+        (plain, "no vault at"),
+        (nested, "no vault at"),
+        (base.join("missing"), "could not access"),
+        (corrupt, "not valid JSON"),
+    ] {
+        let out = bin_home(&home)
+            .args(["--json", "vault", "use"])
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", target.display());
+        let payload = json(&out);
+        assert_eq!(payload["ok"], false);
+        let error = payload["error"].as_str().unwrap();
+        assert!(error.contains(needle), "{error}");
+        assert_eq!(config_json(&home), before, "config changed for {error}");
+    }
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn vault_use_without_home_fails_visibly() {
+    let base = temp_dir();
+    init_vault(&base.join("v"));
+    let out = bin()
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .args(["--json", "vault", "use"])
+        .arg(base.join("v"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let payload = json(&out);
+    assert_eq!(payload["ok"], false);
+    assert!(payload["error"].as_str().unwrap().contains("HOME"));
+    fs::remove_dir_all(base).unwrap();
+}
