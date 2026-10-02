@@ -10,6 +10,9 @@ cargo run -- status
 cargo run -- note --title "Retry billing" Keep credits on the workspace.
 cargo run -- --json status
 ```
+
+With `--json`, command errors print `{ "ok": false, "error": "..." }` on stdout and exit with code 2.
+
 Local checkout expects `../noesora-engine` next to this repo.
 
 ```text
