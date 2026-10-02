@@ -6,12 +6,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use noesora_engine::vault::{self, VaultError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const CONFIG_DIRNAME: &str = ".noesora";
 const CONFIG_FILENAME: &str = "config.json";
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Config {
     default_vault: String,
 }
@@ -20,6 +20,8 @@ struct Config {
 pub enum ConfigError {
     NoHome,
     NotAVault(PathBuf),
+    NoDefault(PathBuf),
+    BadConfig(PathBuf, String),
     Vault(VaultError),
     InvalidPath(PathBuf),
     Io(PathBuf, io::Error),
@@ -36,6 +38,16 @@ impl std::fmt::Display for ConfigError {
                 "no vault at {}; run `noesora init {}` first",
                 path.display(),
                 path.display()
+            ),
+            ConfigError::NoDefault(file) => write!(
+                f,
+                "no default vault configured ({} is missing); run `noesora vault use <path>` first",
+                file.display()
+            ),
+            ConfigError::BadConfig(file, why) => write!(
+                f,
+                "invalid config {}: {why}; run `noesora vault use <path>` to rewrite it",
+                file.display()
             ),
             ConfigError::Vault(err) => write!(f, "{err}"),
             ConfigError::InvalidPath(path) => {
@@ -70,7 +82,7 @@ pub fn config_file(home: &Path) -> PathBuf {
 }
 
 /// The path must be a vault root itself: a parent directory that holds a vault is not accepted.
-fn validate_vault(path: &Path) -> Result<PathBuf, ConfigError> {
+pub fn validate_vault(path: &Path) -> Result<PathBuf, ConfigError> {
     let root = fs::canonicalize(path).map_err(|err| ConfigError::Io(path.to_path_buf(), err))?;
     if !vault::vault_file(&root).is_file() {
         return Err(ConfigError::NotAVault(root));
@@ -100,4 +112,27 @@ pub fn set_default_vault(home: &Path, path: &Path) -> Result<(PathBuf, PathBuf),
             io_err(err)
         })?;
     Ok((root, file))
+}
+
+/// The vault recorded by `vault use`, revalidated. A missing or malformed config, or a default
+/// that is no longer a vault root, is an error; callers never fall back to another vault.
+pub fn load_default_vault(home: &Path) -> Result<PathBuf, ConfigError> {
+    let file = config_file(home);
+    let raw = fs::read_to_string(&file).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => ConfigError::NoDefault(file.clone()),
+        _ => ConfigError::Io(file.clone(), err),
+    })?;
+    let config: Config = serde_json::from_str(&raw)
+        .map_err(|err| ConfigError::BadConfig(file.clone(), err.to_string()))?;
+    let path = PathBuf::from(&config.default_vault);
+    if !path.is_absolute() {
+        return Err(ConfigError::BadConfig(
+            file,
+            format!(
+                "default_vault {:?} is not an absolute path",
+                config.default_vault
+            ),
+        ));
+    }
+    validate_vault(&path)
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::config::{self, ConfigError};
+use crate::mcp;
 use clap::{CommandFactory, Parser, Subcommand};
 use noesora_engine::index::{self, IndexError, SearchResult};
 use noesora_engine::record::{self, RecordError, RecordStatus};
@@ -51,6 +52,8 @@ enum Command {
     Search { query: String },
     /// Run one read-only SQL query against the local index.
     Query { sql: String },
+    /// Serve search, query, note and handoff over stdio MCP for the global default vault.
+    Mcp,
     /// Manage the user-global default vault used by MCP.
     Vault {
         #[command(subcommand)]
@@ -93,22 +96,55 @@ struct OkNote {
 }
 
 #[derive(Serialize)]
-struct OkSearch {
-    ok: bool,
-    command: &'static str,
-    hits: Vec<index::SearchHit>,
-    refused: bool,
+pub(crate) struct OkSearch {
+    pub(crate) ok: bool,
+    pub(crate) command: &'static str,
+    pub(crate) hits: Vec<index::SearchHit>,
+    pub(crate) refused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'static str>,
+    pub(crate) reason: Option<&'static str>,
+}
+
+impl OkSearch {
+    pub(crate) fn from_result(command: &'static str, result: SearchResult) -> Self {
+        let (hits, reason) = match result {
+            SearchResult::Hits(hits) => (hits, None),
+            SearchResult::Refused => (Vec::new(), Some("no_evidence")),
+        };
+        OkSearch {
+            ok: true,
+            command,
+            hits,
+            refused: reason.is_some(),
+            reason,
+        }
+    }
 }
 
 #[derive(Serialize)]
-struct OkQuery {
-    ok: bool,
-    command: &'static str,
-    columns: Vec<String>,
-    rows: Vec<Vec<String>>,
-    truncated: bool,
+pub(crate) struct OkQuery {
+    pub(crate) ok: bool,
+    pub(crate) command: &'static str,
+    pub(crate) columns: Vec<String>,
+    pub(crate) rows: Vec<Vec<String>>,
+    pub(crate) truncated: bool,
+}
+
+impl OkQuery {
+    pub(crate) fn from_result(result: index::QueryResult) -> Self {
+        let index::QueryResult {
+            columns,
+            rows,
+            truncated,
+        } = result;
+        OkQuery {
+            ok: true,
+            command: "query",
+            columns,
+            rows,
+            truncated,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -197,23 +233,13 @@ pub fn run() -> ExitCode {
         },
         Some(Command::Search { query }) => match search(&query) {
             Ok(result) => {
-                let (hits, reason) = match result {
-                    SearchResult::Hits(hits) => (hits, None),
-                    SearchResult::Refused => (Vec::new(), Some("no_evidence")),
-                };
+                let payload = OkSearch::from_result("search", result);
                 if json {
-                    let payload = OkSearch {
-                        ok: true,
-                        command: "search",
-                        hits,
-                        refused: reason.is_some(),
-                        reason,
-                    };
                     println!("{}", serde_json::to_string(&payload).expect("json"));
-                } else if reason.is_some() {
+                } else if payload.refused {
                     println!("Refused: no evidence found.");
                 } else {
-                    for hit in hits {
+                    for hit in payload.hits {
                         println!(
                             "{} [{}] {}:{} {}\n{}",
                             hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.text
@@ -224,21 +250,11 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Mcp) => mcp::run(),
         Some(Command::Query { sql }) => match query(&sql) {
             Ok(result) => {
                 if json {
-                    let index::QueryResult {
-                        columns,
-                        rows,
-                        truncated,
-                    } = result;
-                    let payload = OkQuery {
-                        ok: true,
-                        command: "query",
-                        columns,
-                        rows,
-                        truncated,
-                    };
+                    let payload = OkQuery::from_result(result);
                     println!("{}", serde_json::to_string(&payload).expect("json"));
                 } else {
                     print!("{}", result.csv());
@@ -317,7 +333,12 @@ fn emit_ok<T: Serialize>(json: bool, payload: T, text: String) {
 }
 
 fn clap_error(err: clap::Error) -> ExitCode {
-    let json = std::env::args_os().any(|arg| arg == "--json");
+    // MCP mode keeps stdout for protocol frames only, so `--json` never applies to it.
+    let mcp = std::env::args_os()
+        .skip(1)
+        .find(|arg| !arg.to_string_lossy().starts_with('-'))
+        .is_some_and(|arg| arg == "mcp");
+    let json = !mcp && std::env::args_os().any(|arg| arg == "--json");
     if json && err.exit_code() != 0 {
         return fail(true, err);
     }
