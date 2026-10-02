@@ -1,7 +1,7 @@
 # SPEC
 
 ## §G GOAL
-Public local binary: capture vault notes, retrieve cited evidence or refuse, query facts, expose same engine through stdio MCP. Offline core; Cloud later.
+Public local binary: capture notes, retrieve cited evidence or refuse, query facts, expose same engine over stdio MCP, and browse vault in read-only terminal UI. Offline core; Cloud later.
 
 ## §C CONSTRAINTS
 - Public `noesora` binary, private `../noesora-engine` library. Released binaries install without engine source; source checkout needs sibling repo.
@@ -10,6 +10,7 @@ Public local binary: capture vault notes, retrieve cited evidence or refuse, que
 - ⊥ universal product plugin claim. MCP-capable hosts use `noesora mcp`; other local hosts ? CLI JSON adapters.
 - MCP ! bind one user-global default vault, independent of host cwd. Interactive `status`/`note` keep nearest-cwd behavior.
 - MCP `note`/`handoff` tool calls write without extra Noesora per-write confirmation. Host MAY apply own approval. ⊥ silent transcript ingestion.
+- Terminal UI: Ratatui + Crossterm; read-only local workspace. No graph, sync, or record editing in TUI.
 
 ## §I INTERFACES
 - cmd: `noesora init [path]` → create `.noesora/vault.json`
@@ -21,6 +22,7 @@ Public local binary: capture vault notes, retrieve cited evidence or refuse, que
 - cmd: `noesora --json …` → one JSON object on stdout; failure `{ok:false,error}` + exit ≠ 0
 - cmd: `noesora vault use <path>` → validate vault & set global default for MCP
 - file: `~/.noesora/config.json` → `{"default_vault":"<absolute path>"}`
+- cmd: `noesora tui` → browse nearest vault Markdown and run cited search; read-only
 
 ## §V INVARIANTS
 V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0.
@@ -31,6 +33,10 @@ V5: MCP stdio stdout → protocol messages only; diagnostics ∈ stderr. MCP too
 V6: CLI local path → 0 remote model calls; ⊥ Cloud dependency for search.
 V7: ∀ MCP session → configured global vault wins over host cwd; absent/invalid config → visible error, ⊥ wrong-vault fallback.
 V8: MCP `note`/`handoff` tool call → durable engine write without extra Noesora confirmation; hooks/transcripts remain candidates only.
+V9: TUI resolves nearest vault from cwd, not MCP global default; absolute active vault path stays visible.
+V10: TUI browsing/search writes no records, candidates, or config. Search may rebuild the derived index via engine.
+V11: TUI search renders engine `SearchHit` fields or explicit `no_evidence` refusal; no generated summaries.
+V12: TUI exits/errors → restore terminal raw/alternate-screen state.
 
 ## §T TASKS
 id|status|task|cites
@@ -40,6 +46,7 @@ T3|x|`search` cited hit/refusal from engine in text + JSON|V2,V6,I.cmd
 T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
 T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
+T7|.|add read-only Ratatui vault workspace with file browser and cited search|V2,V9,V10,V11,V12,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
