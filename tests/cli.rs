@@ -80,7 +80,10 @@ fn second_init_json_is_parseable_failure() {
     );
     let payload: serde_json::Value = serde_json::from_slice(&second.stdout).expect("json");
     assert_eq!(payload["ok"], false);
-    assert!(payload["error"].as_str().unwrap().contains("already exists"));
+    assert!(payload["error"]
+        .as_str()
+        .unwrap()
+        .contains("already exists"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -220,4 +223,106 @@ fn note_without_title_flag_fails_parse() {
     assert_eq!(payload["ok"], false);
     assert!(payload["error"].as_str().is_some_and(|e| !e.is_empty()));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_prints_capped_engine_rows_as_csv_and_json() {
+    let root = temp_dir();
+    assert_ok(
+        &bin().arg("init").current_dir(&root).output().unwrap(),
+        "init",
+    );
+    assert_ok(
+        &bin()
+            .args(["note", "--title", "Billing, Q4", "Keep credits here."])
+            .current_dir(&root)
+            .output()
+            .unwrap(),
+        "note",
+    );
+    let text = bin()
+        .args(["query", "SELECT title, status FROM records"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&text, "query CSV");
+    assert_eq!(
+        String::from_utf8(text.stdout).unwrap(),
+        "title,status\n\"Billing, Q4\",open\n"
+    );
+    let json = bin()
+        .args(["--json", "query", "SELECT title, status FROM records"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&json, "query JSON");
+    let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "query");
+    assert_eq!(payload["columns"], serde_json::json!(["title", "status"]));
+    assert_eq!(
+        payload["rows"],
+        serde_json::json!([["Billing, Q4", "open"]])
+    );
+    assert_eq!(payload["truncated"], false);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn query_text_reports_truncation_outside_csv() {
+    let root = temp_dir();
+    assert_ok(
+        &bin().arg("init").current_dir(&root).output().unwrap(),
+        "init",
+    );
+    let sql = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<101) SELECT x FROM n";
+    let out = bin()
+        .args(["query", sql])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&out, "capped query");
+    let csv = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(csv.lines().next(), Some("x"));
+    assert_eq!(csv.lines().last(), Some("100"));
+    assert_eq!(csv.lines().count(), 101);
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "noesora: result capped at 100 rows\n"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn query_write_fails_as_json_without_changing_records() {
+    let root = temp_dir();
+    assert_ok(
+        &bin().arg("init").current_dir(&root).output().unwrap(),
+        "init",
+    );
+    assert_ok(
+        &bin()
+            .args(["note", "--title", "Keep", "durable"])
+            .current_dir(&root)
+            .output()
+            .unwrap(),
+        "note",
+    );
+    let invalid = bin()
+        .args(["--json", "query", "DELETE FROM records"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    let payload: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert_eq!(payload["ok"], false);
+    assert!(payload["error"].as_str().unwrap().contains("read-only"));
+    let count = bin()
+        .args(["query", "SELECT count(*) AS total FROM records"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&count, "count after rejected write");
+    assert_eq!(String::from_utf8(count.stdout).unwrap(), "total\n1\n");
+    fs::remove_dir_all(root).unwrap();
 }
