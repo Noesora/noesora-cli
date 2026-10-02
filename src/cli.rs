@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use noesora_engine::index::{self, IndexError, SearchResult};
 use noesora_engine::record::{self, RecordError, RecordStatus};
 use noesora_engine::vault::{self, VaultError};
 use serde::Serialize;
@@ -45,6 +46,8 @@ enum Command {
         /// Note body.
         body: Vec<String>,
     },
+    /// Search local records with citations or refuse when evidence is missing.
+    Search { query: String },
 }
 
 #[derive(Serialize)]
@@ -70,6 +73,16 @@ struct OkNote {
     id: String,
     path: String,
     vault: String,
+}
+
+#[derive(Serialize)]
+struct OkSearch {
+    ok: bool,
+    command: &'static str,
+    hits: Vec<index::SearchHit>,
+    refused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -148,7 +161,42 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Search { query }) => match search(&query) {
+            Ok(result) => {
+                let (hits, reason) = match result {
+                    SearchResult::Hits(hits) => (hits, None),
+                    SearchResult::Refused => (Vec::new(), Some("no_evidence")),
+                };
+                if json {
+                    let payload = OkSearch {
+                        ok: true,
+                        command: "search",
+                        hits,
+                        refused: reason.is_some(),
+                        reason,
+                    };
+                    println!("{}", serde_json::to_string(&payload).expect("json"));
+                } else if reason.is_some() {
+                    println!("Refused: no evidence found.");
+                } else {
+                    for hit in hits {
+                        println!(
+                            "{} [{}] {}:{} {}\n{}",
+                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.text
+                        );
+                    }
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json, err),
+        },
     }
+}
+
+fn search(query: &str) -> Result<SearchResult, IndexError> {
+    let cwd = std::env::current_dir()?;
+    let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
+    index::search(&root, query)
 }
 
 fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
