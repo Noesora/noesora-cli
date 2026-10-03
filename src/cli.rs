@@ -54,6 +54,8 @@ enum Command {
     Query { sql: String },
     /// Serve search, query, note and handoff over stdio MCP for the global default vault.
     Mcp,
+    /// Browse the nearest vault in a read-only terminal workspace.
+    Tui,
     /// Manage the user-global default vault used by MCP.
     Vault {
         #[command(subcommand)]
@@ -251,6 +253,16 @@ pub fn run() -> ExitCode {
             Err(err) => fail(json, err),
         },
         Some(Command::Mcp) => mcp::run(),
+        Some(Command::Tui) => {
+            if json {
+                fail(true, "the tui command does not support --json")
+            } else {
+                match crate::tui::run() {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(err) => fail(false, err),
+                }
+            }
+        }
         Some(Command::Query { sql }) => match query(&sql) {
             Ok(result) => {
                 if json {
