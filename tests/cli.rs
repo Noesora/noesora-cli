@@ -501,3 +501,109 @@ fn vault_use_without_home_fails_visibly() {
     assert!(payload["error"].as_str().unwrap().contains("HOME"));
     fs::remove_dir_all(base).unwrap();
 }
+
+#[test]
+fn candidate_import_v13_preserves_bytes_and_stays_unindexed() {
+    let base = temp_dir();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let root = base.join("vault");
+    init_vault(&root);
+    let nested = root.join("work");
+    fs::create_dir_all(&nested).unwrap();
+    let source = nested.join("session.jsonl");
+    let transcript: &[u8] = b"{\"text\":\"candidate-only-v13-marker\"}\r\n\xff";
+    fs::write(&source, transcript).unwrap();
+
+    let out = bin_home(&home)
+        .args(["candidate", "import", "session.jsonl"])
+        .current_dir(&nested)
+        .output()
+        .unwrap();
+    assert_ok(&out, "candidate import");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(".noesora/candidates/"));
+
+    let candidates = root.join(".noesora").join("candidates");
+    let files: Vec<_> = fs::read_dir(&candidates)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(fs::read(&files[0]).unwrap(), transcript);
+    assert!(!root.join(".noesora").join("records").exists());
+    assert!(!home.join(".noesora").exists());
+
+    let search = bin_home(&home)
+        .args(["--json", "search", "candidate-only-v13-marker"])
+        .current_dir(&nested)
+        .output()
+        .unwrap();
+    assert_ok(&search, "candidate search");
+    let result = json(&search);
+    assert_eq!(result["refused"], true);
+    assert_eq!(result["reason"], "no_evidence");
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn candidate_import_v13_json_reports_destination_and_errors() {
+    let base = temp_dir();
+    let home = base.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let root = base.join("vault");
+    init_vault(&root);
+    let source = base.join("session.jsonl");
+    let transcript = b"{\"text\":\"complete candidate file\"}\n";
+    fs::write(&source, transcript).unwrap();
+
+    let imported = bin_home(&home)
+        .args(["--json", "candidate", "import"])
+        .arg(&source)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&imported, "JSON candidate import");
+    let payload = json(&imported);
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "candidate import");
+    let destination = PathBuf::from(payload["path"].as_str().unwrap());
+    assert_eq!(
+        destination.parent().unwrap(),
+        fs::canonicalize(&root)
+            .unwrap()
+            .join(".noesora")
+            .join("candidates")
+    );
+    assert_eq!(fs::read(&destination).unwrap(), transcript);
+
+    let missing = base.join("missing.jsonl");
+    let failed = bin_home(&home)
+        .args(["--json", "candidate", "import"])
+        .arg(&missing)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(2));
+    let error = json(&failed);
+    assert_eq!(error["ok"], false);
+    assert!(error["error"].as_str().unwrap().contains("missing.jsonl"));
+
+    let outside = base.join("outside-vault");
+    fs::create_dir_all(&outside).unwrap();
+    let no_vault = bin_home(&home)
+        .args(["--json", "candidate", "import"])
+        .arg(&source)
+        .current_dir(&outside)
+        .output()
+        .unwrap();
+    assert_eq!(no_vault.status.code(), Some(2));
+    let error = json(&no_vault);
+    assert_eq!(error["ok"], false);
+    assert!(error["error"].as_str().unwrap().contains("no vault found"));
+    assert!(!fs::canonicalize(&outside)
+        .unwrap()
+        .join(".noesora")
+        .exists());
+    assert!(!home.join(".noesora").exists());
+    fs::remove_dir_all(base).unwrap();
+}

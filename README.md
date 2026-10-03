@@ -25,6 +25,8 @@ Query accepts one read-only `SELECT` or `WITH` statement. The engine refreshes i
 
 `vault use <path>` validates a vault root and saves its canonical absolute path in `~/.noesora/config.json`. `status`, `note`, `search` and `query` still use the nearest vault above the working directory.
 
+`candidate import <path>` copies the selected file's bytes into `.noesora/candidates/` under the nearest vault. The caller must confirm the file is complete. Candidates stay unindexed and are not accepted as records.
+
 `noesora mcp` serves `search`, `query`, `note` and `handoff` over stdio, always using the configured default vault. Missing or invalid config is an error, never a cwd fallback. Tool writes create durable records without an extra Noesora confirmation; host-side approval is separate. MCP reserves stdout for protocol messages and sends diagnostics to stderr. `--json` does not wrap MCP traffic.
 
 Local checkout expects `../noesora-engine` next to this repo.
