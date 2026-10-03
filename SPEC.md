@@ -16,7 +16,7 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - cmd: `noesora init [path]` → create `.noesora/vault.json`
 - cmd: `noesora status` → nearest vault metadata
 - cmd: `noesora note --title <title> [--status open|done|blocked] [--file <path>]... [body]` → durable record
-- cmd: `noesora search <query>` → cited hits; JSON/MCP search includes `truncated`, false on refusal.
+- cmd: `noesora search <query>` → cited hits or `{ok:true,hits:[],refused:true,reason:"no_evidence",truncated:false}`; JSON/MCP include `truncated`; capped text notice ∈ stderr
 - cmd: `noesora query <sql>` → read-only capped CSV
 - cmd: `noesora mcp` → stdio MCP tools `search`, `query`, `note`, `handoff`; search includes `truncated`
 - cmd: `noesora --json …` → one JSON object on stdout; failure `{ok:false,error}` + exit ≠ 0
@@ -37,7 +37,7 @@ V9: TUI resolves nearest vault from cwd, not MCP global default; absolute active
 V10: TUI browsing/search writes no records, candidates, or config. Search may rebuild the derived index via engine.
 V11: TUI search renders engine `SearchHit` fields or explicit `no_evidence` refusal; no generated summaries.
 V12: TUI exits/errors → restore terminal raw/alternate-screen state.
-V13: `truncated=true` → visible cap notice; cited hits remain browsable.
+V13: JSON/MCP search → `truncated=true` iff ranked hits were omitted; false on refusal. Capped text search → notice ∈ stderr; TUI → visible notice, cited hits stay browsable.
 V14: ∀ engine search-result API changes → CLI, MCP, TUI consumers in this branch compile against sibling engine API.
 
 ## §T TASKS
@@ -56,3 +56,4 @@ id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
 B3|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14
+B4|2026-10-04|[VERIFIED] merge left duplicate MCP test tail; `cargo test` failed `unexpected closing delimiter` at `tests/mcp.rs:489`|remove duplicate tail

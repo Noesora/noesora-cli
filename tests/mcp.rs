@@ -312,7 +312,7 @@ fn note_and_handoff_report_invalid_input_as_tool_errors() {
 }
 
 #[test]
-fn v14_search_refuses_without_evidence() {
+fn v13_search_refuses_without_evidence() {
     let world = World::new();
     let mut session = world.session();
     session.call("note", json!({ "title": "Known", "body": "alpha beta" }));
@@ -327,7 +327,7 @@ fn v14_search_refuses_without_evidence() {
 }
 
 #[test]
-fn v14_search_reports_truncation_at_the_hit_cap() {
+fn v13_search_reports_truncation_at_the_hit_cap() {
     let world = World::new();
     let mut session = world.session();
     for index in 0..11 {
