@@ -19,7 +19,7 @@ cargo run -- mcp
 
 With `--json`, command errors print `{ "ok": false, "error": "..." }` on stdout and exit with code 2.
 
-Search reads local records through the engine. A hit includes its record path, byte span, whole-file hash, and quoted source text. An unknown query returns an explicit `no_evidence` refusal in JSON.
+Search reads local records through the engine and returns at most 10 ranked hits. [VERIFIED] Each hit includes its record ID, path, byte span, whole-file hash, and quoted source text. JSON and MCP responses include `truncated`, true only when more ranked hits exist. Refusals use `truncated: false`. Capped text search emits a stderr notice only when more ranked hits exist; stdout stays cited results.
 
 Query accepts one read-only `SELECT` or `WITH` statement. The engine refreshes its index from canonical records before reading. Text output is CSV with a header and at most 100 rows. A capped text result reports the limit on stderr; stdout stays CSV. `--json` returns `columns`, `rows` and `truncated`.
 

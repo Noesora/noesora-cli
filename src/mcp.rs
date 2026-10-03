@@ -21,8 +21,8 @@ use crate::cli::{OkQuery, OkSearch};
 use crate::config;
 
 const INSTRUCTIONS: &str = "Noesora local vault. `search` returns cited records or an explicit \
-refusal; `query` runs one read-only SQL SELECT over the index; `note` and `handoff` write durable \
-records to the configured vault.";
+refusal, with `truncated` indicating omitted ranked matches; `query` runs one read-only SQL SELECT \
+over the index; `note` and `handoff` write durable records to the configured vault.";
 
 const EMPTY_SECTION: &str = "None";
 
@@ -127,7 +127,8 @@ impl Noesora {
 
     #[tool(
         description = "Search the vault's records. Returns cited hits (id, type, title, path, \
-span, hash, text) or an explicit refusal with reason no_evidence."
+span, hash, text), `truncated` for omitted ranked hits, or an explicit refusal with reason \
+no_evidence and `truncated: false`."
     )]
     async fn search(&self, Parameters(args): Parameters<SearchArgs>) -> CallToolResult {
         let result = self

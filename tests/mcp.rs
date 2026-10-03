@@ -283,6 +283,7 @@ fn note_and_handoff_persist_in_global_vault_not_cwd() {
     // Written records are immediately retrievable with citations.
     let found = session.call("search", json!({ "query": "credits" }));
     assert_eq!(found["structuredContent"]["refused"], false, "{found}");
+    assert_eq!(found["structuredContent"]["truncated"], false, "{found}");
     let hit = &found["structuredContent"]["hits"][0];
     assert_eq!(hit["title"], "Retry billing");
     for field in ["id", "type", "path", "span", "hash", "text"] {
@@ -320,8 +321,42 @@ fn search_refuses_without_evidence() {
     assert_eq!(
         refused["structuredContent"],
         json!({ "ok": true, "command": "search", "hits": [],
-                "refused": true, "reason": "no_evidence" })
+                "refused": true, "reason": "no_evidence", "truncated": false })
     );
+    session.finish();
+}
+
+#[test]
+fn search_reports_truncation_at_the_hit_cap() {
+    let world = World::new();
+    let mut session = world.session();
+    for index in 0..11 {
+        let title = format!("Cap fixture {index}");
+        let body = if index < 10 {
+            "exactcap overcap"
+        } else {
+            "overcap"
+        };
+        let written = session.call("note", json!({ "title": title, "body": body }));
+        assert_eq!(written["isError"], false, "{written}");
+    }
+
+    let exact = session.call("search", json!({ "query": "exactcap" }));
+    assert_eq!(
+        exact["structuredContent"]["hits"].as_array().unwrap().len(),
+        10
+    );
+    assert_eq!(exact["structuredContent"]["truncated"], false);
+
+    let capped = session.call("search", json!({ "query": "overcap" }));
+    assert_eq!(
+        capped["structuredContent"]["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        10
+    );
+    assert_eq!(capped["structuredContent"]["truncated"], true);
     session.finish();
 }
 

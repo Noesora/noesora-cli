@@ -15,7 +15,7 @@ Public local binary: capture vault notes, retrieve cited evidence or refuse, que
 - cmd: `noesora init [path]` → create `.noesora/vault.json`
 - cmd: `noesora status` → nearest vault metadata
 - cmd: `noesora note --title <title> [--status open|done|blocked] [--file <path>]... [body]` → durable record
-- cmd: `noesora search <query>` → cited hits or `{ok:true,hits:[],refused:true,reason:"no_evidence"}`
+- cmd: `noesora search <query>` → cited hits or `{ok:true,hits:[],refused:true,reason:"no_evidence",truncated:false}`; JSON/MCP include `truncated`
 - cmd: `noesora query <sql>` → read-only capped CSV
 - cmd: `noesora mcp` → stdio MCP, tools `search`, `query`, `note`, `handoff`
 - cmd: `noesora --json …` → one JSON object on stdout; failure `{ok:false,error}` + exit ≠ 0
@@ -31,6 +31,7 @@ V5: MCP stdio stdout → protocol messages only; diagnostics ∈ stderr. MCP too
 V6: CLI local path → 0 remote model calls; ⊥ Cloud dependency for search.
 V7: ∀ MCP session → configured global vault wins over host cwd; absent/invalid config → visible error, ⊥ wrong-vault fallback.
 V8: MCP `note`/`handoff` tool call → durable engine write without extra Noesora confirmation; hooks/transcripts remain candidates only.
+V9: JSON/MCP search → `truncated` bool (false on refusal); capped text notice ∈ stderr; stdout stays cited results.
 
 ## §T TASKS
 id|status|task|cites
@@ -40,8 +41,10 @@ T3|x|`search` cited hit/refusal from engine in text + JSON|V2,V6,I.cmd
 T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
 T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
+T7|x|report truncation in JSON/MCP and capped text search|V9,I.cmd,I.mcp
 
 ## §B BUGS
 id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
+B3|2026-10-04|[VERIFIED] text output omitted `hit.id` despite V2 (`src/cli.rs:248`)|print ID; assert text output
