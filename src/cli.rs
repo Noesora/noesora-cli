@@ -244,8 +244,8 @@ pub fn run() -> ExitCode {
                 } else {
                     for hit in payload.hits {
                         println!(
-                            "{} [{}] {}:{} {}\n{}",
-                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.text
+                            "{} [{}] {}:{} {}\nID: {}\n{}",
+                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.id, hit.text
                         );
                     }
                     if truncated {

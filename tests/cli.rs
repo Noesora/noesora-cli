@@ -182,6 +182,7 @@ fn search_cites_local_record_and_refuses_unknown_query() {
     assert!(rendered.stderr.is_empty());
     let text = String::from_utf8(rendered.stdout).unwrap();
     assert!(text.contains(path));
+    assert!(text.contains(&format!("ID: {}", hit["id"].as_str().unwrap())));
     assert!(text.contains(hit["span"].as_str().unwrap()));
     assert!(text.contains(hit["hash"].as_str().unwrap()));
     assert!(text.contains("Café credits stay local."));

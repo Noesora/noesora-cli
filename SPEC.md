@@ -47,3 +47,4 @@ T7|x|report truncation in JSON/MCP and capped text search|V9,I.cmd,I.mcp
 id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
+B3|2026-10-04|[VERIFIED] text output omitted `hit.id` despite V2 (`src/cli.rs:248`)|print ID; assert text output
