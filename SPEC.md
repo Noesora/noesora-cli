@@ -16,9 +16,9 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - cmd: `noesora init [path]` → create `.noesora/vault.json`
 - cmd: `noesora status` → nearest vault metadata
 - cmd: `noesora note --title <title> [--status open|done|blocked] [--file <path>]... [body]` → durable record
-- cmd: `noesora search <query>` → cited hits or `{ok:true,hits:[],refused:true,reason:"no_evidence"}`
+- cmd: `noesora search <query>` → cited hits; JSON/MCP search includes `truncated`, false on refusal.
 - cmd: `noesora query <sql>` → read-only capped CSV
-- cmd: `noesora mcp` → stdio MCP, tools `search`, `query`, `note`, `handoff`
+- cmd: `noesora mcp` → stdio MCP tools `search`, `query`, `note`, `handoff`; search includes `truncated`
 - cmd: `noesora --json …` → one JSON object on stdout; failure `{ok:false,error}` + exit ≠ 0
 - cmd: `noesora vault use <path>` → validate vault & set global default for MCP
 - file: `~/.noesora/config.json` → `{"default_vault":"<absolute path>"}`
@@ -37,6 +37,8 @@ V9: TUI resolves nearest vault from cwd, not MCP global default; absolute active
 V10: TUI browsing/search writes no records, candidates, or config. Search may rebuild the derived index via engine.
 V11: TUI search renders engine `SearchHit` fields or explicit `no_evidence` refusal; no generated summaries.
 V12: TUI exits/errors → restore terminal raw/alternate-screen state.
+V13: `truncated=true` → visible cap notice; cited hits remain browsable.
+V14: ∀ engine search-result API changes → CLI, MCP, TUI consumers in this branch compile against sibling engine API.
 
 ## §T TASKS
 id|status|task|cites
@@ -47,8 +49,10 @@ T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
 T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
 T7|x|add read-only Ratatui vault workspace with file browser and cited search|V2,V9,V10,V11,V12,I.cmd
+T8|x|migrate CLI/MCP/TUI search consumers and show cap notice|V13,V14,I.cmd,I.mcp
 
 ## §B BUGS
 id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
+B3|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14

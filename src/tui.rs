@@ -66,7 +66,7 @@ impl App {
     }
 
     fn move_hit(&mut self, offset: isize) {
-        let Some(SearchResult::Hits(hits)) = &self.results else {
+        let Some(SearchResult::Hits { hits, .. }) = &self.results else {
             return;
         };
         if !hits.is_empty() {
@@ -139,17 +139,26 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(),
 }
 
 fn draw(frame: &mut Frame, app: &App) {
+    let notice = if app.mode == Mode::Search {
+        search_notice(&app.results)
+    } else {
+        None
+    };
+    let header_height = if notice.is_some() { 3 } else { 2 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(header_height),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .split(frame.area());
     let root = clean(&app.root.display().to_string());
     let heading = if app.mode == Mode::Search {
-        format!("Vault: {root}\nSearch: {}", clean(&app.query))
+        match notice {
+            Some(notice) => format!("Vault: {root}\nSearch: {}\n{notice}", clean(&app.query)),
+            None => format!("Vault: {root}\nSearch: {}", clean(&app.query)),
+        }
     } else {
         format!("Vault: {root}")
     };
@@ -168,6 +177,15 @@ fn draw(frame: &mut Frame, app: &App) {
     match app.mode {
         Mode::Browse => draw_files(frame, app, body[0], body[1]),
         Mode::Search => draw_search(frame, app, body[0], body[1]),
+    }
+}
+
+fn search_notice(results: &Option<SearchResult>) -> Option<&'static str> {
+    match results {
+        Some(SearchResult::Hits {
+            truncated: true, ..
+        }) => Some("More matches exist; showing the first 10."),
+        _ => None,
     }
 }
 
@@ -228,15 +246,15 @@ fn draw_search(
     right: ratatui::layout::Rect,
 ) {
     let hits = match &app.results {
-        Some(SearchResult::Hits(hits)) => hits.as_slice(),
+        Some(SearchResult::Hits { hits, .. }) => hits.as_slice(),
         _ => &[],
     };
     let items = match &app.results {
         Some(SearchResult::Refused) => vec![ListItem::new("No evidence found.")],
-        Some(SearchResult::Hits(hits)) if hits.is_empty() => {
+        Some(SearchResult::Hits { hits, .. }) if hits.is_empty() => {
             vec![ListItem::new("No evidence found.")]
         }
-        Some(SearchResult::Hits(hits)) => hits
+        Some(SearchResult::Hits { hits, .. }) => hits
             .iter()
             .map(|hit| ListItem::new(format!("{} [{}]", clean(&hit.title), clean(&hit.kind))))
             .collect(),
@@ -262,7 +280,7 @@ fn draw_search(
     } else {
         match &app.results {
             Some(SearchResult::Refused) => "Refused: no evidence found.".to_owned(),
-            Some(SearchResult::Hits(_)) => "No evidence found.".to_owned(),
+            Some(SearchResult::Hits { .. }) => "No evidence found.".to_owned(),
             None => "Search uses local indexed evidence.".to_owned(),
         }
     };
@@ -381,7 +399,7 @@ mod tests {
         app.query = "workspace credits".to_owned();
         app.search().unwrap();
 
-        let Some(SearchResult::Hits(hits)) = app.results else {
+        let Some(SearchResult::Hits { hits, .. }) = app.results else {
             panic!("expected cited search hit");
         };
         let hit = &hits[0];
@@ -411,6 +429,42 @@ mod tests {
         assert!(detail.contains(&format!("Hash: {}", hit.hash)));
         assert_eq!(fs::read(&written.path).unwrap(), before);
         assert!(!root.join(".noesora/candidates").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn over_cap_search_shows_notice_with_cited_results() {
+        let dir = temp_dir();
+        let root = vault::init_vault(&dir).unwrap();
+        for index in 0..11 {
+            record::write_note(
+                &root,
+                &format!("Cap fixture {index}"),
+                "overcapneedle",
+                RecordStatus::Open,
+                &[],
+            )
+            .unwrap();
+        }
+        let mut app = App::new(root).unwrap();
+        app.mode = Mode::Search;
+        app.query = "overcapneedle".to_owned();
+        app.search().unwrap();
+
+        assert_eq!(
+            search_notice(&app.results),
+            Some("More matches exist; showing the first 10.")
+        );
+        let Some(SearchResult::Hits {
+            hits,
+            truncated: true,
+        }) = app.results
+        else {
+            panic!("expected truncated cited results");
+        };
+        assert_eq!(hits.len(), index::SEARCH_HIT_CAP);
+        assert!(hits
+            .iter()
+            .all(|hit| !hit.span.is_empty() && !hit.hash.is_empty()));
         fs::remove_dir_all(dir).unwrap();
     }
 }
