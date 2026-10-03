@@ -137,7 +137,7 @@ fn note_writes_markdown_in_vault() {
 }
 
 #[test]
-fn search_cites_local_record_and_refuses_unknown_query() {
+fn v14_search_cites_local_record_and_refuses_unknown_query() {
     let root = temp_dir();
     let init = bin().arg("init").current_dir(&root).output().unwrap();
     assert_ok(&init, "init");
