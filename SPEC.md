@@ -55,5 +55,6 @@ T8|x|migrate CLI/MCP/TUI search consumers and show cap notice|V13,V14,I.cmd,I.mc
 id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
-B3|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14
-B4|2026-10-04|[VERIFIED] merge left duplicate MCP test tail; `cargo test` failed `unexpected closing delimiter` at `tests/mcp.rs:489`|remove duplicate tail
+B3|2026-10-04|[VERIFIED] text output omitted `hit.id` despite V2 (`src/cli.rs:248`)|print ID; assert text output
+B4|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14
+B5|2026-10-04|[VERIFIED] merge left duplicate MCP test tail; `cargo test` failed `unexpected closing delimiter` at `tests/mcp.rs:489`|remove duplicate tail
