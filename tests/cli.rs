@@ -137,7 +137,7 @@ fn note_writes_markdown_in_vault() {
 }
 
 #[test]
-fn search_cites_local_record_and_refuses_unknown_query() {
+fn v14_search_cites_local_record_and_refuses_unknown_query() {
     let root = temp_dir();
     let init = bin().arg("init").current_dir(&root).output().unwrap();
     assert_ok(&init, "init");
@@ -161,6 +161,7 @@ fn search_cites_local_record_and_refuses_unknown_query() {
     assert_ok(&found, "search hit");
     let payload: serde_json::Value = serde_json::from_slice(&found.stdout).unwrap();
     assert_eq!(payload["ok"], true);
+    assert_eq!(payload["truncated"], false);
     assert_eq!(payload["refused"], false);
     let hit = &payload["hits"][0];
     assert_eq!(hit["text"], "Café credits stay local.");
@@ -178,8 +179,10 @@ fn search_cites_local_record_and_refuses_unknown_query() {
         .output()
         .unwrap();
     assert_ok(&rendered, "search text");
+    assert!(rendered.stderr.is_empty());
     let text = String::from_utf8(rendered.stdout).unwrap();
     assert!(text.contains(path));
+    assert!(text.contains(&format!("ID: {}", hit["id"].as_str().unwrap())));
     assert!(text.contains(hit["span"].as_str().unwrap()));
     assert!(text.contains(hit["hash"].as_str().unwrap()));
     assert!(text.contains("Café credits stay local."));
@@ -194,6 +197,59 @@ fn search_cites_local_record_and_refuses_unknown_query() {
     assert_eq!(payload["hits"], serde_json::json!([]));
     assert_eq!(payload["refused"], true);
     assert_eq!(payload["reason"], "no_evidence");
+    assert_eq!(payload["truncated"], false);
+    for index in 0..11 {
+        let title = format!("Cap fixture {index}");
+        let body = if index < 10 {
+            "exactcap overcap"
+        } else {
+            "overcap"
+        };
+        let note = bin()
+            .args(["note", "--title", title.as_str()])
+            .arg(body)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert_ok(&note, "cap fixture note");
+    }
+    let exact = bin()
+        .args(["search", "exactcap", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&exact, "exact-cap search");
+    let exact: serde_json::Value = serde_json::from_slice(&exact.stdout).unwrap();
+    assert_eq!(exact["hits"].as_array().unwrap().len(), 10);
+    assert_eq!(exact["truncated"], false);
+
+    let capped = bin()
+        .args(["search", "overcap", "--json"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&capped, "over-cap search");
+    let capped: serde_json::Value = serde_json::from_slice(&capped.stdout).unwrap();
+    assert_eq!(capped["hits"].as_array().unwrap().len(), 10);
+    assert_eq!(capped["truncated"], true);
+
+    let capped_text = bin()
+        .args(["search", "overcap"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert_ok(&capped_text, "over-cap text search");
+    assert_eq!(
+        String::from_utf8(capped_text.stdout)
+            .unwrap()
+            .lines()
+            .filter(|line| line.contains("records/"))
+            .count(),
+        10
+    );
+    assert!(String::from_utf8(capped_text.stderr)
+        .unwrap()
+        .contains("more matches exist"));
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -61,6 +61,8 @@ enum Command {
         #[command(subcommand)]
         action: CandidateCommand,
     },
+    /// Browse the nearest vault in a read-only terminal workspace.
+    Tui,
     /// Manage the user-global default vault used by MCP.
     Vault {
         #[command(subcommand)]
@@ -114,15 +116,16 @@ pub(crate) struct OkSearch {
     pub(crate) command: &'static str,
     pub(crate) hits: Vec<index::SearchHit>,
     pub(crate) refused: bool,
+    pub(crate) truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<&'static str>,
 }
 
 impl OkSearch {
     pub(crate) fn from_result(command: &'static str, result: SearchResult) -> Self {
-        let (hits, reason) = match result {
-            SearchResult::Hits { hits, .. } => (hits, None),
-            SearchResult::Refused => (Vec::new(), Some("no_evidence")),
+        let (hits, reason, truncated) = match result {
+            SearchResult::Hits { hits, truncated } => (hits, None, truncated),
+            SearchResult::Refused => (Vec::new(), Some("no_evidence"), false),
         };
         OkSearch {
             ok: true,
@@ -130,6 +133,7 @@ impl OkSearch {
             hits,
             refused: reason.is_some(),
             reason,
+            truncated,
         }
     }
 }
@@ -254,6 +258,7 @@ pub fn run() -> ExitCode {
         Some(Command::Search { query }) => match search(&query) {
             Ok(result) => {
                 let payload = OkSearch::from_result("search", result);
+                let truncated = payload.truncated;
                 if json {
                     println!("{}", serde_json::to_string(&payload).expect("json"));
                 } else if payload.refused {
@@ -261,8 +266,15 @@ pub fn run() -> ExitCode {
                 } else {
                     for hit in payload.hits {
                         println!(
-                            "{} [{}] {}:{} {}\n{}",
-                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.text
+                            "{} [{}] {}:{} {}\nID: {}\n{}",
+                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.id, hit.text
+                        );
+                    }
+                    if truncated {
+                        let _ = writeln!(
+                            io::stderr(),
+                            "noesora: search results capped at {} hits; more matches exist",
+                            index::SEARCH_HIT_CAP
                         );
                     }
                 }
@@ -271,6 +283,16 @@ pub fn run() -> ExitCode {
             Err(err) => fail(json, err),
         },
         Some(Command::Mcp) => mcp::run(),
+        Some(Command::Tui) => {
+            if json {
+                fail(true, "the tui command does not support --json")
+            } else {
+                match crate::tui::run() {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(err) => fail(false, err),
+                }
+            }
+        }
         Some(Command::Query { sql }) => match query(&sql) {
             Ok(result) => {
                 if json {
