@@ -43,7 +43,7 @@ T3|x|`search` cited hit/refusal from engine in text + JSON|V2,V6,I.cmd
 T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
 T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
-T8|~|add manual candidate import command|V3,V13,V14,I.cmd
+T8|x|add manual candidate import command|V3,V13,V14,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
