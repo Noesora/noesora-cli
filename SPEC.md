@@ -33,6 +33,7 @@ V6: CLI local path → 0 remote model calls; ⊥ Cloud dependency for search.
 V7: ∀ MCP session → configured global vault wins over host cwd; absent/invalid config → visible error, ⊥ wrong-vault fallback.
 V8: MCP `note`/`handoff` tool call → durable engine write without extra Noesora confirmation; hooks/transcripts remain candidates only.
 V13: candidate import copies caller-selected source bytes unchanged to nearest vault's `.noesora/candidates/`; no record/config writes or auto-accept. Caller confirms source completeness.
+V14: Every CLI PR → Trusted CLI passes against current Engine main at exact CLI SHA before merge.
 
 ## §T TASKS
 id|status|task|cites
@@ -42,9 +43,10 @@ T3|x|`search` cited hit/refusal from engine in text + JSON|V2,V6,I.cmd
 T4|x|`query` read-only capped CSV + JSON through engine|V4,I.cmd
 T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
-T8|x|add manual candidate import command|V3,V13,I.cmd
+T8|~|add manual candidate import command|V3,V13,V14,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
 B1|2026-10-01|`Cli::parse()` exits before JSON error handler|V1
 B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture sequence + exclusive mkdir
+B3|2026-10-04|[VERIFIED] `src/cli.rs:124` E0164: expected tuple variant, found struct variant `SearchResult::Hits`|match `{ hits, .. }`; V14

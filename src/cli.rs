@@ -121,7 +121,7 @@ pub(crate) struct OkSearch {
 impl OkSearch {
     pub(crate) fn from_result(command: &'static str, result: SearchResult) -> Self {
         let (hits, reason) = match result {
-            SearchResult::Hits(hits) => (hits, None),
+            SearchResult::Hits { hits, .. } => (hits, None),
             SearchResult::Refused => (Vec::new(), Some("no_evidence")),
         };
         OkSearch {
