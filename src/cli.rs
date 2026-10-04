@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -5,6 +6,7 @@ use std::process::ExitCode;
 use crate::config::{self, ConfigError};
 use crate::mcp;
 use clap::{CommandFactory, Parser, Subcommand};
+use noesora_engine::candidate;
 use noesora_engine::index::{self, IndexError, SearchResult};
 use noesora_engine::record::{self, RecordError, RecordStatus};
 use noesora_engine::vault::{self, VaultError};
@@ -54,6 +56,11 @@ enum Command {
     Query { sql: String },
     /// Serve search, query, note and handoff over stdio MCP for the global default vault.
     Mcp,
+    /// Import a caller-selected transcript into the nearest vault as an unindexed candidate.
+    Candidate {
+        #[command(subcommand)]
+        action: CandidateCommand,
+    },
     /// Browse the nearest vault in a read-only terminal workspace.
     Tui,
     /// Manage the user-global default vault used by MCP.
@@ -70,6 +77,12 @@ enum VaultCommand {
         /// Vault root (the directory holding `.noesora/vault.json`).
         path: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum CandidateCommand {
+    /// Import a transcript file the caller has confirmed is complete.
+    Import { path: PathBuf },
 }
 
 #[derive(Serialize)]
@@ -157,6 +170,13 @@ struct OkVaultUse {
     command: &'static str,
     vault: String,
     config: String,
+}
+
+#[derive(Serialize)]
+struct OkCandidateImport {
+    ok: bool,
+    command: &'static str,
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -292,6 +312,23 @@ pub fn run() -> ExitCode {
             }
             Err(err) => fail(json, err),
         },
+        Some(Command::Candidate {
+            action: CandidateCommand::Import { path },
+        }) => match candidate_import(&path) {
+            Ok(path) => {
+                emit_ok(
+                    json,
+                    OkCandidateImport {
+                        ok: true,
+                        command: "candidate import",
+                        path: path.display().to_string(),
+                    },
+                    format!("Imported transcript candidate to {}", path.display()),
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json, err),
+        },
         Some(Command::Vault {
             action: VaultCommand::Use { path },
         }) => match vault_use(&path) {
@@ -334,6 +371,13 @@ fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
 
 fn vault_use(path: &std::path::Path) -> Result<(PathBuf, PathBuf), ConfigError> {
     config::set_default_vault(&config::home_dir()?, path)
+}
+fn candidate_import(source: &std::path::Path) -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|err| format!("could not determine current directory: {err}"))?;
+    let transcript = File::open(source)
+        .map_err(|err| format!("could not open transcript {}: {err}", source.display()))?;
+    candidate::write_transcript_candidate(&cwd, transcript).map_err(|err| err.to_string())
 }
 
 fn note(

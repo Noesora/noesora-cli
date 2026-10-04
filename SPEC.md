@@ -21,13 +21,14 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - cmd: `noesora mcp` → stdio MCP tools `search`, `query`, `note`, `handoff`; search includes `truncated`
 - cmd: `noesora --json …` → one JSON object on stdout; failure `{ok:false,error}` + exit ≠ 0
 - cmd: `noesora vault use <path>` → validate vault & set global default for MCP
+- cmd: `noesora candidate import <path>` → copy caller-selected file bytes into nearest vault's `.noesora/candidates/`; text/JSON report destination
 - file: `~/.noesora/config.json` → `{"default_vault":"<absolute path>"}`
 - cmd: `noesora tui` → browse nearest vault Markdown and run cited search; read-only
 
 ## §V INVARIANTS
 V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0.
 V2: ∀ search hit → engine-backed `id,type,title,path,span,hash,text`; no evidence → explicit refusal. ⊥ generated answer.
-V3: CLI/MCP writes → engine record path only. Candidates ∉ default search.
+V3: Durable note/handoff writes → engine record path only; candidate import → engine candidate path only. Candidates ∉ default search; ⊥ auto-accept.
 V4: `query` read-only & row-capped by engine; text result CSV.
 V5: MCP stdio stdout → protocol messages only; diagnostics ∈ stderr. MCP tools reuse CLI engine results.
 V6: CLI local path → 0 remote model calls; ⊥ Cloud dependency for search.
@@ -38,7 +39,8 @@ V10: TUI browsing/search writes no records, candidates, or config. Search may re
 V11: TUI search renders engine `SearchHit` fields or explicit `no_evidence` refusal; no generated summaries.
 V12: TUI exits/errors → restore terminal raw/alternate-screen state.
 V13: JSON/MCP search → `truncated=true` iff ranked hits were omitted; false on refusal. Capped text search → notice ∈ stderr; TUI → visible notice, cited hits stay browsable.
-V14: ∀ engine search-result API changes → CLI, MCP, TUI consumers in this branch compile against sibling engine API.
+V14: ∀ engine search-result API changes → CLI, MCP, TUI compile against current Engine main at exact CLI SHA via Trusted CLI before merge.
+V15: candidate import copies caller-selected source bytes unchanged to nearest vault's `.noesora/candidates/`; no record/config writes or auto-accept. Caller confirms source completeness.
 
 ## §T TASKS
 id|status|task|cites
@@ -50,6 +52,7 @@ T5|x|configure one global default vault for MCP|V7,I.cmd,I.file
 T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
 T7|x|add read-only Ratatui vault workspace with file browser and cited search|V2,V9,V10,V11,V12,I.cmd
 T8|x|migrate CLI/MCP/TUI search consumers and show cap notice|V13,V14,I.cmd,I.mcp
+T9|x|add manual candidate import command|V3,V15,V14,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
@@ -58,3 +61,4 @@ B2|2026-10-01|parallel CLI tests reused timestamp-only temp root|atomic fixture 
 B3|2026-10-04|[VERIFIED] text output omitted `hit.id` despite V2 (`src/cli.rs:248`)|print ID; assert text output
 B4|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14
 B5|2026-10-04|[VERIFIED] merge left duplicate MCP test tail; `cargo test` failed `unexpected closing delimiter` at `tests/mcp.rs:489`|remove duplicate tail
+B6|2026-10-04|[VERIFIED] Trusted CLI `37205422486` E0164: tuple match on struct `SearchResult::Hits`|field match with `truncated`; V14
