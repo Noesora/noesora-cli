@@ -1,0 +1,23 @@
+{
+  "name": "noesora",
+  "version": "0.1.0",
+  "description": "Noesora local-first CLI",
+  "license": "Apache-2.0",
+  "repository": "github:Noesora/noesora-cli",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "bin": { "noesora": "bin/noesora.js" },
+  "files": [
+    "bin/noesora.js",
+    "scripts/install-binary.mjs",
+    "scripts/check-release-assets.mjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install-binary.mjs",
+    "prepublishOnly": "node scripts/check-release-assets.mjs"
+  },
+  "publishConfig": { "access": "public" }
+}

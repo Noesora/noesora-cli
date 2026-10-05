@@ -1,0 +1,121 @@
+name: npm CLI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            asset: noesora-darwin-arm64
+            runner: macos-15
+            binary: target/release/noesora
+          - target: darwin-x64
+            asset: noesora-darwin-x64
+            runner: macos-15-intel
+            binary: target/release/noesora
+          - target: linux-arm64
+            asset: noesora-linux-arm64
+            runner: ubuntu-24.04-arm
+            binary: target/release/noesora
+          - target: linux-x64
+            asset: noesora-linux-x64
+            runner: ubuntu-24.04
+            binary: target/release/noesora
+          - target: win32-x64
+            asset: noesora-win32-x64.exe
+            runner: windows-2025
+            binary: target/release/noesora.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: noesora-cli
+      - uses: actions/checkout@v4
+        with:
+          repository: Noesora/noesora-engine
+          ref: main
+          token: ${{ secrets.ENGINE_REPO_READ_TOKEN }}
+          path: noesora-engine
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        working-directory: noesora-cli
+      - name: Run Rust tests
+        run: cargo test --locked
+        working-directory: noesora-cli
+      - name: Build native CLI
+        run: cargo build --release --locked
+        working-directory: noesora-cli
+      - name: Prepare release asset
+        run: node scripts/prepare-release-asset.mjs --target '${{ matrix.target }}' --binary '${{ matrix.binary }}' --out '${{ runner.temp }}/noesora-release'
+        working-directory: noesora-cli
+        shell: bash
+      - name: Create npm package tarball
+        run: |
+          node -e "require('node:fs').mkdirSync(process.env.PACK_DIR, { recursive: true })"
+          npm pack --pack-destination "$PACK_DIR" --json
+        working-directory: noesora-cli
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/noesora-npm
+      - name: Install and exercise packed npm package
+        run: |
+          version=$(node -p "require('./package.json').version")
+          node scripts/assert-npm-install.mjs \
+            "${{ runner.temp }}/noesora-npm/noesora-$version.tgz" \
+            "${{ runner.temp }}/noesora-release/${{ matrix.asset }}"
+        working-directory: noesora-cli
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: noesora-release-${{ matrix.target }}
+          path: ${{ runner.temp }}/noesora-release/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: noesora-cli
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/noesora-release
+          merge-multiple: true
+      - name: Check release tag matches package version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "$GITHUB_REF_NAME" = "v$version"
+        working-directory: noesora-cli
+        shell: bash
+      - name: Create release checksums
+        run: node scripts/write-release-checksums.mjs '${{ runner.temp }}/noesora-release'
+        working-directory: noesora-cli
+      - name: Publish GitHub Release assets
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag '${{ runner.temp }}/noesora-release'/noesora-* '${{ runner.temp }}/noesora-release/SHA256SUMS'
+        working-directory: noesora-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
