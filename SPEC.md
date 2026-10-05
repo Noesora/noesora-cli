@@ -11,6 +11,8 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - MCP ! bind one user-global default vault, independent of host cwd. Interactive `status`/`note` keep nearest-cwd behavior.
 - MCP `note`/`handoff` tool calls write without extra Noesora per-write confirmation. Host MAY apply own approval. ⊥ silent transcript ingestion.
 - Terminal UI: Ratatui + Crossterm; read-only local workspace. No graph, sync, or record editing in TUI.
+- npm package uses one meta-package plus optional native packages. Targets: macOS x64/arm64, Linux x64/arm64, Windows x64.
+- npm launcher requires Node.js 18+; runtime uses packaged native binary, not Engine source or a Noesora service.
 
 ## §I INTERFACES
 - cmd: `noesora init [path]` → create `.noesora/vault.json`
@@ -24,6 +26,7 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - cmd: `noesora candidate import <path>` → copy caller-selected file bytes into nearest vault's `.noesora/candidates/`; text/JSON report destination
 - file: `~/.noesora/config.json` → `{"default_vault":"<absolute path>"}`
 - cmd: `noesora tui` → browse nearest vault Markdown and run cited search; read-only. Keys: `↑/↓` browse, `/` search, `Enter` run, `Esc` return from Search, `q` quit in Browse.
+- npm: `npm install -g noesora` → global `noesora` command via platform-specific native package
 
 ## §V INVARIANTS
 V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0.
@@ -42,6 +45,11 @@ V13: JSON/MCP search → `truncated=true` iff ranked hits were omitted; false on
 V14: ∀ engine search-result API changes → CLI, MCP, TUI compile against current Engine main at exact CLI SHA via Trusted CLI before merge.
 V15: candidate import copies caller-selected source bytes unchanged to nearest vault's `.noesora/candidates/`; no record/config writes or auto-accept. Caller confirms source completeness.
 V16: TUI Search mode appends every printable key, including `q`, to the query; only Browse `q` quits; `Esc` returns to Browse.
+V17: supported os/arch → matching optional binary package; unsupported pair → explicit error.
+V18: npm launcher forwards argv, inherited stdio, and native exit code.
+V19: installed npm CLI → no runtime downloads or Engine source requirement.
+V20: meta-package and native packages share version; each native package declares matching npm `os`/`cpu`.
+V21: npm publish → manual workflow dispatch only, after all five target install smokes pass.
 
 ## §T TASKS
 id|status|task|cites
@@ -55,6 +63,9 @@ T7|x|add read-only Ratatui vault workspace with file browser and cited search|V2
 T8|x|migrate CLI/MCP/TUI search consumers and show cap notice|V13,V14,I.cmd,I.mcp
 T9|x|add manual candidate import command|V3,V15,V14,I.cmd
 T10|x|fix TUI search key routing|V16,I.cmd
+T11|x|add npm meta-package, native package builder, and install smoke|V17,V18,V19,V20,I.npm
+T12|x|add five-target build/test workflow and gated npm publish workflow|V21,T11
+T13|.|publish meta-package and five native packages to npm|T12
 
 ## §B BUGS
 id|date|cause|fix

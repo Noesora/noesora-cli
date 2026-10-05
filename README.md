@@ -45,3 +45,14 @@ cargo test
 ```
 
 Apache-2.0. See [LICENSE](LICENSE).
+## Install from npm
+
+[VERIFIED] `package.json:8` contains `"engines": { "node": ">=18" }`.
+
+```sh
+npm install --global noesora
+noesora --help
+```
+
+[INFERRED] After publication, the commands above use the matching optional package; evidence: `package.json:13-17` and `scripts/prepare-npm-package.mjs:47-48`.
+[VERIFIED] Local smoke ran `assert-npm-install.mjs`; npm reported `added 2 packages in 457ms` and the script exited 0.
