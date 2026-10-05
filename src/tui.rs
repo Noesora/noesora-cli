@@ -74,6 +74,33 @@ impl App {
                 (self.selected_hit as isize + offset).rem_euclid(hits.len() as isize) as usize;
         }
     }
+    fn handle_key(&mut self, code: KeyCode) -> Result<bool, Box<dyn Error>> {
+        match (self.mode, code) {
+            (Mode::Browse, KeyCode::Char('q')) => return Ok(false),
+            (Mode::Search, KeyCode::Esc) => self.mode = Mode::Browse,
+            (Mode::Browse, KeyCode::Esc) => return Ok(false),
+            (Mode::Browse, KeyCode::Char('/')) => {
+                self.mode = Mode::Search;
+                self.query.clear();
+                self.results = None;
+            }
+            (Mode::Search, KeyCode::Enter) => self.search()?,
+            (Mode::Search, KeyCode::Backspace) => {
+                self.query.pop();
+                self.results = None;
+            }
+            (Mode::Search, KeyCode::Char(ch)) if !ch.is_control() => {
+                self.query.push(ch);
+                self.results = None;
+            }
+            (Mode::Browse, KeyCode::Up) => self.select_file(-1)?,
+            (Mode::Browse, KeyCode::Down) => self.select_file(1)?,
+            (Mode::Search, KeyCode::Up) => self.move_hit(-1),
+            (Mode::Search, KeyCode::Down) => self.move_hit(1),
+            _ => {}
+        }
+        Ok(true)
+    }
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -107,31 +134,8 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(),
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            match (app.mode, key.code) {
-                (_, KeyCode::Char('q')) => break,
-                (Mode::Search, KeyCode::Esc) => app.mode = Mode::Browse,
-                (Mode::Browse, KeyCode::Esc) => break,
-                (Mode::Browse, KeyCode::Char('/')) => {
-                    app.mode = Mode::Search;
-                    app.query.clear();
-                    app.results = None;
-                }
-                (Mode::Search, KeyCode::Enter) => app.search()?,
-                (Mode::Search, KeyCode::Backspace) => {
-                    app.query.pop();
-                    app.results = None;
-                }
-                (Mode::Search, KeyCode::Char(ch)) => {
-                    if !ch.is_control() {
-                        app.query.push(ch);
-                        app.results = None;
-                    }
-                }
-                (Mode::Browse, KeyCode::Up) => app.select_file(-1)?,
-                (Mode::Browse, KeyCode::Down) => app.select_file(1)?,
-                (Mode::Search, KeyCode::Up) => app.move_hit(-1),
-                (Mode::Search, KeyCode::Down) => app.move_hit(1),
-                _ => {}
+            if !app.handle_key(key.code)? {
+                break;
             }
         }
     }
@@ -164,7 +168,7 @@ fn draw(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(Paragraph::new(heading), chunks[0]);
     let footer = if app.mode == Mode::Search {
-        "Enter search · ↑/↓ results · Esc back · q quit"
+        "Enter search · ↑/↓ results · Esc back"
     } else {
         "↑/↓ browse · / search · q quit"
     };
@@ -359,6 +363,21 @@ mod tests {
         path
     }
 
+    #[test]
+    fn v16_search_mode_keeps_q_as_query_text_and_browse_q_quits() {
+        let dir = temp_dir();
+        let root = vault::init_vault(&dir).unwrap();
+        let mut app = App::new(root).unwrap();
+        app.mode = Mode::Search;
+        app.query = "quarterly".to_owned();
+
+        assert!(app.handle_key(KeyCode::Char('q')).unwrap());
+        assert_eq!(app.query, "quarterlyq");
+        app.mode = Mode::Browse;
+        assert!(!app.handle_key(KeyCode::Char('q')).unwrap());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn browser_lists_nested_markdown_in_stable_order() {
         let dir = temp_dir();
