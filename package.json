@@ -7,13 +7,17 @@
   "type": "commonjs",
   "engines": { "node": ">=18" },
   "bin": { "noesora": "bin/noesora.js" },
-  "files": ["bin/noesora.js"],
-  "publishConfig": { "access": "public" },
-  "optionalDependencies": {
-    "noesora-bin-darwin-arm64": "0.1.0",
-    "noesora-bin-darwin-x64": "0.1.0",
-    "noesora-bin-linux-arm64": "0.1.0",
-    "noesora-bin-linux-x64": "0.1.0",
-    "noesora-bin-win32-x64": "0.1.0"
-  }
+  "files": [
+    "bin/noesora.js",
+    "scripts/install-binary.mjs",
+    "scripts/check-release-assets.mjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install-binary.mjs",
+    "prepublishOnly": "node scripts/check-release-assets.mjs"
+  },
+  "publishConfig": { "access": "public" }
 }

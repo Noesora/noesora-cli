@@ -5,13 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the six npm packages after all target checks pass
-        type: boolean
-        required: true
-        default: false
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -25,18 +19,23 @@ jobs:
       matrix:
         include:
           - target: darwin-arm64
+            asset: noesora-darwin-arm64
             runner: macos-15
             binary: target/release/noesora
           - target: darwin-x64
+            asset: noesora-darwin-x64
             runner: macos-15-intel
             binary: target/release/noesora
           - target: linux-arm64
+            asset: noesora-linux-arm64
             runner: ubuntu-24.04-arm
             binary: target/release/noesora
           - target: linux-x64
+            asset: noesora-linux-x64
             runner: ubuntu-24.04
             binary: target/release/noesora
           - target: win32-x64
+            asset: noesora-win32-x64.exe
             runner: windows-2025
             binary: target/release/noesora.exe
     steps:
@@ -64,65 +63,59 @@ jobs:
       - name: Build native CLI
         run: cargo build --release --locked
         working-directory: noesora-cli
-      - name: Prepare output directory
-        run: mkdir -p "${{ runner.temp }}/noesora-npm"
+      - name: Prepare release asset
+        run: node scripts/prepare-release-asset.mjs --target '${{ matrix.target }}' --binary '${{ matrix.binary }}' --out '${{ runner.temp }}/noesora-release'
+        working-directory: noesora-cli
         shell: bash
-      - name: Pack meta-package
-        run: npm pack --pack-destination "${{ runner.temp }}/noesora-npm" --json
+      - name: Create npm package tarball
+        run: |
+          node -e "require('node:fs').mkdirSync(process.env.PACK_DIR, { recursive: true })"
+          npm pack --pack-destination "$PACK_DIR" --json
         working-directory: noesora-cli
-      - name: Prepare platform package
-        id: native
         shell: bash
-        working-directory: noesora-cli
-        run: echo "stage=$(node scripts/prepare-npm-package.mjs --target '${{ matrix.target }}' --binary '${{ matrix.binary }}' --out '${{ runner.temp }}/noesora-npm')" >> "$GITHUB_OUTPUT"
-      - name: Pack platform package
-        run: npm pack "${{ steps.native.outputs.stage }}" --pack-destination "${{ runner.temp }}/noesora-npm" --json
-        working-directory: noesora-cli
-      - name: Install packed packages
-        shell: bash
-        working-directory: noesora-cli
+        env:
+          PACK_DIR: ${{ runner.temp }}/noesora-npm
+      - name: Install and exercise packed npm package
         run: |
           version=$(node -p "require('./package.json').version")
-          prefix="${{ runner.temp }}/noesora-install"
-          npm install --prefix "$prefix" --no-save --ignore-scripts --omit=optional --no-audit --no-fund \
+          node scripts/assert-npm-install.mjs \
             "${{ runner.temp }}/noesora-npm/noesora-$version.tgz" \
-            "${{ runner.temp }}/noesora-npm/noesora-bin-${{ matrix.target }}-$version.tgz"
-          node scripts/assert-npm-install.mjs "$prefix" "$version"
+            "${{ runner.temp }}/noesora-release/${{ matrix.asset }}"
+        working-directory: noesora-cli
+        shell: bash
       - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: noesora-npm-${{ matrix.target }}
-          path: ${{ runner.temp }}/noesora-npm/noesora-bin-${{ matrix.target }}-*.tgz
+          name: noesora-release-${{ matrix.target }}
+          path: ${{ runner.temp }}/noesora-release/${{ matrix.asset }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
-  publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify
     runs-on: ubuntu-24.04
-    environment: npm-publish
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           path: noesora-cli
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
       - uses: actions/download-artifact@v4
         with:
-          path: noesora-cli/dist/npm
+          path: ${{ runner.temp }}/noesora-release
           merge-multiple: true
-      - name: Pack meta-package
-        run: npm pack --pack-destination dist/npm --json
-        working-directory: noesora-cli
-      - name: Publish platform packages, then meta-package
-        shell: bash
+      - name: Check release tag matches package version
         run: |
-          for package in dist/npm/noesora-bin-*.tgz; do
-            npm publish "$package" --access public --ignore-scripts
-          done
           version=$(node -p "require('./package.json').version")
-          npm publish "dist/npm/noesora-$version.tgz" --access public --ignore-scripts
+          test "$GITHUB_REF_NAME" = "v$version"
+        working-directory: noesora-cli
+        shell: bash
+      - name: Create release checksums
+        run: node scripts/write-release-checksums.mjs '${{ runner.temp }}/noesora-release'
+        working-directory: noesora-cli
+      - name: Publish GitHub Release assets
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag '${{ runner.temp }}/noesora-release'/noesora-* '${{ runner.temp }}/noesora-release/SHA256SUMS'
         working-directory: noesora-cli
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}

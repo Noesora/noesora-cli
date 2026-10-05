@@ -47,12 +47,15 @@ cargo test
 Apache-2.0. See [LICENSE](LICENSE).
 ## Install from npm
 
-[VERIFIED] `package.json:8` contains `"engines": { "node": ">=18" }`.
+[VERIFIED] package.json line 8 requires Node.js 18 or newer for the launcher and installer.
+
+After the package is published, install it with:
 
 ```sh
 npm install --global noesora
 noesora --help
 ```
 
-[INFERRED] After publication, the commands above use the matching optional package; evidence: `package.json:13-17` and `scripts/prepare-npm-package.mjs:47-48`.
-[VERIFIED] Local smoke ran `assert-npm-install.mjs`; npm reported `added 2 packages in 457ms` and the script exited 0.
+[INFERRED] The postinstall downloads the version-matched GitHub Release asset and checks SHA256SUMS. Install needs network access to GitHub Releases. Do not use --ignore-scripts. Evidence: scripts/install-binary.mjs.
+[VERIFIED] Local smoke output: npm install smoke passed for darwin-arm64; checksum mismatch and missing release assets were rejected. The test uses a local HTTP fixture, not a public GitHub Release.
+[INFERRED] Maintainers push tag v<package-version> to build release assets, then run npm login and npm publish. CI does not publish to npm. Evidence: .github/workflows/npm.yml and scripts/check-release-assets.mjs.
