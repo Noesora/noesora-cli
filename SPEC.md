@@ -23,7 +23,7 @@ Public local binary: capture notes, retrieve cited evidence or refuse, query fac
 - cmd: `noesora vault use <path>` → validate vault & set global default for MCP
 - cmd: `noesora candidate import <path>` → copy caller-selected file bytes into nearest vault's `.noesora/candidates/`; text/JSON report destination
 - file: `~/.noesora/config.json` → `{"default_vault":"<absolute path>"}`
-- cmd: `noesora tui` → browse nearest vault Markdown and run cited search; read-only
+- cmd: `noesora tui` → browse nearest vault Markdown and run cited search; read-only. Keys: `↑/↓` browse, `/` search, `Enter` run, `Esc` return from Search, `q` quit in Browse.
 
 ## §V INVARIANTS
 V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0.
@@ -41,6 +41,7 @@ V12: TUI exits/errors → restore terminal raw/alternate-screen state.
 V13: JSON/MCP search → `truncated=true` iff ranked hits were omitted; false on refusal. Capped text search → notice ∈ stderr; TUI → visible notice, cited hits stay browsable.
 V14: ∀ engine search-result API changes → CLI, MCP, TUI compile against current Engine main at exact CLI SHA via Trusted CLI before merge.
 V15: candidate import copies caller-selected source bytes unchanged to nearest vault's `.noesora/candidates/`; no record/config writes or auto-accept. Caller confirms source completeness.
+V16: TUI Search mode appends every printable key, including `q`, to the query; only Browse `q` quits; `Esc` returns to Browse.
 
 ## §T TASKS
 id|status|task|cites
@@ -53,6 +54,7 @@ T6|x|stdio MCP `search`,`query`,`note`,`handoff` on same core|V3,V5,V7,V8,I.mcp
 T7|x|add read-only Ratatui vault workspace with file browser and cited search|V2,V9,V10,V11,V12,I.cmd
 T8|x|migrate CLI/MCP/TUI search consumers and show cap notice|V13,V14,I.cmd,I.mcp
 T9|x|add manual candidate import command|V3,V15,V14,I.cmd
+T10|x|fix TUI search key routing|V16,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
@@ -62,3 +64,4 @@ B3|2026-10-04|[VERIFIED] text output omitted `hit.id` despite V2 (`src/cli.rs:24
 B4|2026-10-03|[VERIFIED] `error[E0164]`: TUI build found old `SearchResult::Hits` match in `src/cli.rs:113`|V14
 B5|2026-10-04|[VERIFIED] merge left duplicate MCP test tail; `cargo test` failed `unexpected closing delimiter` at `tests/mcp.rs:489`|remove duplicate tail
 B6|2026-10-04|[VERIFIED] Trusted CLI `37205422486` E0164: tuple match on struct `SearchResult::Hits`|field match with `truncated`; V14
+B7|2026-10-05|[VERIFIED] global `q` exit arm consumed Search input, closing TUI while typing|V16
