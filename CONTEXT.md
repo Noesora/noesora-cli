@@ -1,7 +1,37 @@
 # Noesora CLI
 
-Public user-facing command line. This repo is clap, `--json`, and process exit codes.
+## Current source contract
 
-Vault logic, SPEC, and ADRs are in the private sibling `../noesora-engine`.
+[SOURCE] `src/config.rs` opens the Engine's single global store via `Store::from_env()`. Default application home is `~/.noesora`; `NOESORA_HOME` overrides it, and the store root is `<application-home>/store`. CLI cwd does not select a vault/database. Blindspot: exact cross-platform home resolution belongs to the private Engine.
 
-Local build needs that checkout next to this one. Users install released binaries.
+[SOURCE] Current history intake is explicit: `session import --client {omp,claude-code,codex} <jsonl>` imports one file; `source add --client <adapter> <root>` explicitly enables a source root; `sync` reads configured enabled roots once. `import-vault <path>` separately imports existing Markdown records without altering originals. Raw session history is not promoted into approved records. Existing vaults and user session logs are not implicitly moved or rewritten.
+
+[SOURCE] Search supports text and semantic modes, `conversation`/`tools`/`all` scope, project/client filters, bounded results, and source-cited hits. Semantic retrieval uses the pinned local embedding model and explicit `model install`, `model status`, and `index` commands. CLI JSON success/error envelopes vary by command; partial sync reports retained imports and source errors, sets `ok:false`, and exits 2.
+
+[SOURCE] MCP owner mode (`mcp`) exposes `search`, `query`, `note`, `handoff`, `session_list`, and `session_read`. `--managed` requires exactly one of an exact nonempty `--project` or explicit `--all-projects`; either read-only mode advertises only `search`, `session_list`, and `session_read`. `query`, `note`, and `handoff` are hidden from managed tool discovery and guarded again on direct calls. This is an MCP policy, not a native OS sandbox. Omitted owner note/handoff project becomes `local`; explicit empty project is rejected.
+
+[SOURCE] `src/tui.rs` implements a read-only raw-history browser and local cited search, with background startup/session/transcript/search work and visible store/model/index readiness and errors. Session list fetches 50 rows plus one lookahead; transcript pages contain 20 messages; search shows at most 10 hits. Controls: arrows select/scroll, Enter opens/runs, Tab changes focus, PgUp/PgDn pages, `/` starts/edits search, `m` toggles text/semantic, `x` expands a selected tool message, `r` refreshes sessions, `q` quits from non-input views and stays query text while search input is focused, and Ctrl-C exits. The UI does not import or sync history, write records or candidates, change source configuration, or mutate the MCP default vault; derived index state remains Engine-owned.
+[SOURCE] JSON CLI mutations and MCP startup preflight response-safe store-root paths before canonical record writes. Plain output and diagnostics sanitize untrusted terminal controls while preserving ordinary Unicode, newlines, and tabs; JSON retains original data with JSON escaping.
+
+## Build and verification boundary
+
+[SOURCE] `Cargo.toml` has a path dependency on private sibling `../noesora-engine`; `.github/engine-revision` pins `c4674871bfb28b56f1e9e5153745f23d17823417`. Public `.github/workflows/cli.yml` checks selected Rust formatting and `node --check scripts/smoke.mjs`; it explicitly is not behavior CI. Behavior/model checks require the private Trusted CLI workflow against the exact CLI SHA and this Engine pin.
+
+[VERIFIED, fresh R1 local gate, bg71] The restored-source binary SHA-256 is `bfc5a2b6bfd7d58f7791eb05d1e4309a7b74ccd985854358bc127dda8657ec98`. On macOS, the full gate passed: `cargo fmt --check`, `node --check scripts/smoke.mjs`, `cargo check --offline --locked --all-targets`, `cargo test --offline --locked` (45 passed: 23 unit, 14 CLI, 8 MCP), and `cargo build --offline --locked --bin noesora`. Restored source hashes: `src/mcp.rs` `a71cf85582e5ab69b33353aad514ede879fa1313dc55b59b191b7d50db12e65a`; `src/memory_policy.rs` `079cb64af0081b635f217ed80683f27330dcf8492b1e59343db5401e34cdce96`.
+
+[VERIFIED, fresh R1 PTY receipt, bg75] The PTY run passed in 28.21 seconds under OS-enforced network denial; its receipt is `cli-first-build/r1-milestone.QQnUpL/pty-proof/memory-proof.json`. Captures verify session-list lookahead and paging (50-row boundary, rapid next-page, final-page, stable return), transcript ranges, long-ID page-range visibility, wrapped-message and expanded-tool tails, and 7-bit/C1/OSC52 sanitization. Long-ID ranges and message/tool tails were visible at both 120x38 and 72x26.
+
+[VERIFIED, fresh R1 PTY receipt, bg75] The captured query input kept `q` as text; a separate `q` sent with session-list focus exited normally. Ctrl-C also exited normally. The receipt does not cover quit behavior in every other non-input view. Pending page state survived the observed search-cancel/unlock frame, stale startup did not replace a query result, selected session B remained selected while A results were pending, and Esc reloaded sessions and status. Canonical store and fixture hashes were unchanged.
+
+[VERIFIED, fresh R1 PTY/MCP receipts, bg73/bg75] Terminal attributes were restored before harness cleanup on normal TUI exits and after the init-failure run. All managed-MCP child processes exited normally; forced-cleanup count was zero.
+
+[UNOBSERVED] Pending page-worker and transcript-worker completion were not observed. In the init-failure capture, partial-initialization entry and any terminal-attribute transition while the child was alive were also unobserved, so partial-init behavior remains unclaimed.
+
+[VERIFIED, fresh R1 MCP receipt, bg73, synthetic fixtures only] The receipt returned `ok: true` under OS-enforced network denial. Project and all-project managed modes each exposed only `search`, `session_list`, and `session_read`; project mode denied cross-project filters and foreign/unknown direct reads, while all-project mode read both fixture projects. Both modes denied direct SQL and mutations and kept managed record counts at zero. Owner mode retained all six tools, defaulted an omitted project to `local`, rejected explicit empty write projects, and created two fixture records. Two citations passed independent hash, field, span, and quote checks. Native providers, provider credentials, and user config/history were not exercised.
+
+[VERIFIED, fresh offline CLI receipt, bg74] Under OS-enforced network denial, the run printed `Local-model paraphrase and late-message retrieval passed with OS-enforced network denial.` and `Global archive, all three adapters, cross-project citations, deduplication, Tools scope, readonly SQL, malformed-source and source-integrity checks passed.`
+[VERIFIED, restored-source negative controls] With the project-scoped read replaced by generic `Store.read_session`, `managed_project_connection_limits_search_and_direct_reads_to_exact_project` failed because a foreign session was returned. Disabling the outer managed-router guard (`if policy.managed` changed to `if false`) made `managed_all_projects_is_explicit_read_only_and_can_read_both_projects` fail with 6 tools instead of 3. Setting only `owner_tools=true` passed behind the unchanged router and is not negative-proof evidence. The full local gate, including all 45 tests, passed after all mutations were restored.
+
+Local developer receipt target: `../../cli-first-build/r1-milestone.QQnUpL/evidence.json`.
+
+[PENDING] Linux-only non-UTF-8 path cases, exact-head private Linux CI, public/private paired CI, CLI publication, and R02 implementation remain pending. R02 UI, including `/memory`, `/agent`, and `/integrations` command-text behavior, is approved but not implemented. The R1 milestone local save awaits the lead. R1 is only a read-only memory browser; no native provider or native session compatibility is verified, and the full TUI/native goal is not complete. The local receipt documents R1 local behavior only.
