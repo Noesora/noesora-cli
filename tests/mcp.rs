@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -181,6 +182,60 @@ fn omp_fixture(path: &Path) -> Vec<u8> {
         .into_bytes();
     fs::write(path, &bytes).expect("write OMP session");
     bytes
+}
+
+fn assert_cited_session_text(home: &Path, hit: &Value) {
+    assert_eq!(hit["type"], "session");
+    let path = hit["path"]
+        .as_str()
+        .expect("session citation has a canonical path");
+    let source_path = home.join("store").join(path);
+    let source = fs::read(&source_path).expect("read canonical snapshot");
+    let expected_hash = format!("sha256:{:x}", Sha256::digest(&source));
+    assert_eq!(hit["hash"].as_str(), Some(expected_hash.as_str()));
+
+    let span = hit["span"]
+        .as_array()
+        .expect("session citation has a canonical byte span");
+    let [start, end] = span.as_slice() else {
+        panic!("session citation span must have two offsets: {span:?}");
+    };
+    let start = start.as_u64().expect("citation start offset") as usize;
+    let end = end.as_u64().expect("citation end offset") as usize;
+    let mut event = source
+        .get(start..end)
+        .expect("citation span is within the canonical snapshot");
+    event = event.strip_suffix(b"\n").unwrap_or(event);
+    event = event.strip_suffix(b"\r").unwrap_or(event);
+    let event: Value = serde_json::from_slice(event).expect("canonical event JSON");
+    let pointer = hit["field"]
+        .as_str()
+        .expect("session citation has a JSON pointer");
+    let source_text = event
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .expect("JSON pointer selects source text");
+
+    let text_span = hit["text_span"]
+        .as_array()
+        .expect("session citation has a decoded-text span");
+    let [text_start, text_end] = text_span.as_slice() else {
+        panic!("session text span must have two offsets: {text_span:?}");
+    };
+    let text_start = text_start.as_u64().expect("text start offset") as usize;
+    let text_end = text_end.as_u64().expect("text end offset") as usize;
+    let cited_text = hit["text"]
+        .as_str()
+        .expect("search hit includes cited text");
+    assert_eq!(
+        source_text.get(text_start..text_end),
+        Some(cited_text),
+        "citation text must match the canonical JSON pointer"
+    );
+    assert!(
+        cited_text.contains("application secrets"),
+        "citation text must contain the searched evidence: {cited_text}"
+    );
 }
 
 struct Session {
@@ -441,6 +496,125 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
     assert_eq!(refused["structuredContent"]["refused"], true);
     assert_eq!(refused["structuredContent"]["reason"], "no_evidence");
     assert_eq!(refused["structuredContent"]["truncated"], false);
+    session.finish();
+}
+#[test]
+fn search_engine_failures_keep_codes_and_text_search_recovers_over_stdio() {
+    let world = World::new();
+    let mut session = world.mcp(&[]);
+
+    let refusal = session.call("search", json!({"query":"no-matching-evidence-token"}));
+    assert_eq!(refusal["isError"], false, "{refusal}");
+    assert_eq!(refusal["structuredContent"]["ok"], true);
+    assert_eq!(refusal["structuredContent"]["refused"], true);
+    assert!(refusal["structuredContent"]["code"].is_null());
+
+    for invalid_args in [
+        json!({"query":"application secrets","mode":"vector"}),
+        json!({"query":"application secrets","client":"unsupported-client"}),
+    ] {
+        let invalid = session.call("search", invalid_args);
+        assert_eq!(invalid["isError"], true, "{invalid}");
+        assert_eq!(invalid["structuredContent"]["ok"], false, "{invalid}");
+        assert!(
+            invalid["structuredContent"]["code"].is_null(),
+            "validation errors must not use an Engine search code: {invalid}"
+        );
+        assert!(
+            invalid["structuredContent"]["error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()),
+            "validation failures must retain their distinct error: {invalid}"
+        );
+    }
+
+    let missing_model = session.call(
+        "search",
+        json!({"query":"application secrets","mode":"semantic"}),
+    );
+    assert_eq!(missing_model["isError"], true, "{missing_model}");
+    let error = &missing_model["structuredContent"];
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["code"], "MODEL_UNAVAILABLE");
+    assert!(error["error"]
+        .as_str()
+        .is_some_and(|message| !message.is_empty()));
+
+    let status = bin(&world.home, &world.cwd)
+        .args(["model", "status", "--json"])
+        .output()
+        .expect("read model status for corruption fixture");
+    assert!(
+        status.status.success(),
+        "model status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let model_state: Value = serde_json::from_slice(&status.stdout).expect("model status JSON");
+    let model_dir = PathBuf::from(
+        model_state["path"]
+            .as_str()
+            .expect("model status provides its asset directory"),
+    );
+    fs::create_dir_all(&model_dir).expect("create corrupt model directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&model_dir, fs::Permissions::from_mode(0o700))
+            .expect("make corrupt model directory private");
+    }
+    let manifest = model_dir.join("manifest.json");
+    fs::write(&manifest, b"{not-json").expect("write corrupt model manifest");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600))
+            .expect("make corrupt model manifest private");
+    }
+    let corrupt_model = session.call(
+        "search",
+        json!({"query":"application secrets","mode":"semantic"}),
+    );
+    assert_eq!(corrupt_model["isError"], true, "{corrupt_model}");
+    assert_eq!(corrupt_model["structuredContent"]["ok"], false);
+    assert_eq!(
+        corrupt_model["structuredContent"]["code"],
+        "MODEL_UNAVAILABLE"
+    );
+
+    let initial_text = session.call(
+        "search",
+        json!({"query":"application secrets","mode":"text"}),
+    );
+    assert_eq!(initial_text["isError"], false, "{initial_text}");
+    assert_eq!(initial_text["structuredContent"]["ok"], true);
+    assert_eq!(initial_text["structuredContent"]["refused"], false);
+    let hit = &initial_text["structuredContent"]["hits"][0];
+    assert_cited_session_text(&world.home, hit);
+
+    let canonical_path = world
+        .home
+        .join("store")
+        .join(hit["path"].as_str().expect("canonical citation path"));
+    let canonical_snapshot = fs::read(&canonical_path).expect("read canonical source");
+    fs::write(&canonical_path, b"{malformed canonical JSON\n").expect("corrupt canonical source");
+    let malformed = session.call(
+        "search",
+        json!({"query":"application secrets","mode":"text"}),
+    );
+    assert_eq!(malformed["isError"], true, "{malformed}");
+    assert_eq!(malformed["structuredContent"]["ok"], false);
+    assert_eq!(malformed["structuredContent"]["code"], "SEARCH_FAILED");
+    fs::write(&canonical_path, &canonical_snapshot).expect("restore canonical source");
+
+    let recovered = session.call(
+        "search",
+        json!({"query":"application secrets","mode":"text"}),
+    );
+    assert_eq!(recovered["isError"], false, "{recovered}");
+    assert_eq!(recovered["structuredContent"]["ok"], true);
+    assert_eq!(recovered["structuredContent"]["refused"], false);
+    let recovered_hit = &recovered["structuredContent"]["hits"][0];
+    assert_cited_session_text(&world.home, recovered_hit);
     session.finish();
 }
 

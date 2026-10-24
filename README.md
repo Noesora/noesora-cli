@@ -71,6 +71,10 @@ cargo run -- mcp --managed --all-projects
 
 `--project` must be an exact, nonempty persisted project identity. Project mode exposes only that project. `--all-projects` exposes all projects read-only. Both managed modes advertise only `search`, `session_list`, and `session_read`; `query`, `note`, and `handoff` are omitted from tool discovery and are also rejected by direct method guards. Managed access is an MCP tool policy, not a native operating-system sandbox.
 
+MCP search Engine failures set `isError: true` and preserve `ok: false`, `code`, and `error` in structured content. The codes are `MODEL_UNAVAILABLE` and `SEARCH_FAILED`. Healthy refusals remain successful tool results; argument, policy and worker-transport errors are not mislabeled as model failures.
+
+[VERIFIED local] The MCP typed-error slice passed the offline all-target check and full 47-test suite. Removing only the structured `code` field made its one collected stdio regression fail. An actual CLI/MCP wire smoke under OS network denial observed both categories, `isError: true`, healthy refusals, recovery and independently verified citations; all children exited normally and were reaped. Exact-head private paired CI for this new commit remains pending.
+
 ## Terminal browser
 
 `cargo run -- tui` opens the global session browser and local cited search. The session list fetches 50 entries plus one lookahead to detect another page; transcripts page 20 messages at a time. Use ↑/↓ to move through sessions or scroll details, Enter to open a session or run a search, Tab to change focus, and PageUp/PageDown to page sessions or transcripts. In a transcript, ←/→ selects messages and `x` expands or collapses a tool message. Press `r` in the session list to refresh.

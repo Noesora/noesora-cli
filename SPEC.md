@@ -31,7 +31,7 @@ V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on st
 V2: ∀ search hit → engine-backed `id,type,title,path,span,hash,text`; no evidence → explicit refusal. ⊥ generated answer.
 V3: Writes use Engine global store; imported sessions remain raw sessions. No automatic source intake or promotion.
 V4: `query` read-only & row-capped by engine; text result CSV.
-V5: MCP stdio stdout → protocol messages only; diagnostics ∈ stderr. MCP tools reuse CLI engine results.
+V5: MCP stdio stdout → protocol messages only; diagnostics ∈ stderr. MCP tools reuse CLI engine results. Search Engine failures set isError:true and preserve structured ok:false/code/error; validation, policy and worker-transport failures remain distinct.
 V6: CLI local path → 0 remote model calls; ⊥ Cloud dependency for search.
 V7: CLI/TUI/MCP resolve same global store independent of cwd; no legacy-vault fallback.
 V8: MCP note/handoff explicitly writes approved global records; session results never become approved records implicitly.
