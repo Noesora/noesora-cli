@@ -22,6 +22,8 @@ With `--json`, command errors print `{ "ok": false, "error": "..." }` on stdout 
 
 Search reads local records through the engine and returns at most 10 ranked hits. [VERIFIED] Each hit includes its record ID, path, byte span, whole-file hash, and quoted source text. JSON and MCP responses include `truncated`, true only when more ranked hits exist. Refusals use `truncated: false`. Capped text search emits a stderr notice only when more ranked hits exist; stdout stays cited results.
 
+Search first requires every query term in one passage. If no passage matches, it retries without common English function words. It keeps negation words such as `not`, `no` and `never`.
+
 Query accepts one read-only `SELECT` or `WITH` statement. The engine refreshes its index from canonical records before reading. Text output is CSV with a header and at most 100 rows. A capped text result reports the limit on stderr; stdout stays CSV. `--json` returns `columns`, `rows` and `truncated`.
 
 `vault use <path>` validates a vault root and saves its canonical absolute path in `~/.noesora/config.json`. `status`, `note`, `search` and `query` still use the nearest vault above the working directory.
