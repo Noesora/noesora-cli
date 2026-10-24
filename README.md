@@ -52,6 +52,8 @@ cargo run -- search "where are credentials stored" --mode semantic
 
 `model install` installs the pinned local embedding model; `index` builds pending embeddings. Semantic search reports whether index coverage is complete. Text search and browsing remain available if the model is unavailable.
 
+Search Engine failures in `--json` mode return `{"ok":false,"code":"MODEL_UNAVAILABLE","error":"..."}` or `{"ok":false,"code":"SEARCH_FAILED","error":"..."}` and exit with code 2. The first category identifies unavailable semantic-model prerequisites; the second covers other search failures. A healthy no-match refusal remains a successful response, and generic validation errors do not receive an Engine search category.
+
 `query` accepts one read-only `SELECT` or `WITH` statement. Text output is CSV with a header and at most 100 rows; JSON returns `columns`, `rows`, and `truncated`. Capped text output reports the cap on stderr while stdout stays CSV.
 
 The smoke driver accepts `node scripts/smoke.mjs [<binary>] [--model | --model-dir <installed-directory>] [--keep]`. The default binary is `target/debug/noesora`. `--model` installs the model for the isolated smoke store and may download assets; `--model-dir` instead supplies a previously installed pinned cache and validates its manifest/model identity. These options are mutually exclusive. `--keep` retains the isolated smoke store. With `--model-dir`, model status, indexing, and semantic retrieval run in offline mode. On macOS those checks use a network-denying `sandbox-exec` policy; other platforms do not get that OS-level network boundary.
@@ -79,7 +81,10 @@ The TUI loads session pages, store/index readiness, and model status in backgrou
 
 ## Local development
 
-`Cargo.toml` uses the private sibling `../noesora-engine` at the immutable revision pinned in `.github/engine-revision`: `c4674871bfb28b56f1e9e5153745f23d17823417`. Public CI checks source formatting and smoke-driver syntax, not CLI behavior. The restored-source macOS gate (bg71) passed `cargo fmt --check`, `node --check scripts/smoke.mjs`, `cargo check --offline --locked --all-targets`, `cargo test --offline --locked` (45 passed: 23 unit, 14 CLI, 8 MCP), and `cargo build --offline --locked --bin noesora`. Fresh binary SHA-256: `bfc5a2b6bfd7d58f7791eb05d1e4309a7b74ccd985854358bc127dda8657ec98`.
-Runtime checks with OS-enforced network denial used that binary. The bg73 MCP receipt returned `ok: true` for synthetic fixtures; all managed-MCP child processes exited normally with no forced cleanup. The bg74 offline CLI run reported: `Local-model paraphrase and late-message retrieval passed with OS-enforced network denial.` and `Global archive, all three adapters, cross-project citations, deduplication, Tools scope, readonly SQL, malformed-source and source-integrity checks passed.` The bg75 PTY receipt passed in 28.21 seconds. Linux non-UTF-8 path coverage, exact-head private Linux CI, public/private paired CI, and CLI publication remain pending.
+`Cargo.toml` uses the private sibling `../noesora-engine`; `.github/engine-revision` pins `fc63febea88a2d27302e77a11b4647230fae5f3b`. Public CI checks source formatting and smoke-driver syntax, not CLI behavior. The private Trusted CLI workflow verifies the exact CLI SHA and declared Engine pin before merge.
+
+[VERIFIED baseline] Published R1 CLI commit `75fc796958e11419b976499649f9b35f06b56f59` passed its Linux/macOS paired checks against the earlier Engine pin. That result does not attest to this typed-error change; its focused verification is recorded separately in the PR. History import support does not establish native-agent control compatibility.
+
+[VERIFIED local] The CLI typed-error slice passed `cargo check --offline --locked --all-targets` and `cargo test --offline --locked`: 46 tests passed. Removing the typed search handler made its one collected category/recovery test fail; restoring it returned the full suite to green. An actual binary smoke under OS network denial observed both error codes, a healthy refusal, and text-search recovery. These checks do not attest to installed native-agent compatibility or exact-head paired CI for this new commit.
 
 Apache-2.0. See [LICENSE](LICENSE).
