@@ -804,7 +804,7 @@ fn json_note_with_non_utf8_root_fails_before_persisting_or_indexing() {
         "the failed JSON command must not build an index"
     );
 
-    let (status, _) = output(&mut bin(&home, &cwd).args(["status"]), "text status");
+    let status = output(&mut bin(&home, &cwd).args(["status"]), "text status");
     assert_success(&status, "text status after rejected note");
     let status_text = String::from_utf8(status.stdout).expect("UTF-8 text status");
     assert!(status_text.contains("0 records"), "{status_text}");
