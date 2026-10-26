@@ -211,10 +211,14 @@ impl Noesora {
                     scope,
                     limit: args.limit.unwrap_or(10),
                 };
-                let found = store
-                    .search(&args.query, mode, &filters)
-                    .map_err(|err| err.to_string())?;
-                structured(&search_payload(found))
+                match store.search(&args.query, mode, &filters) {
+                    Ok(found) => structured(&search_payload(found)),
+                    Err(error) => Ok(CallToolResult::structured_error(json!({
+                        "ok": false,
+                        "code": error.code(),
+                        "error": error.to_string(),
+                    }))),
+                }
             })
             .await;
         respond(result)
