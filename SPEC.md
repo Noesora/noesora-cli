@@ -27,7 +27,7 @@ Local memory + branded prompt workspace over installed coding-agent CLIs. Shared
 - mcp: existing owner mode preserved; `mcp --managed --project <exact-id>` or `--managed --all-projects` supplies read-only search/session tools. Managed scopes disable SQL/mutation and enforce direct session-ID reads. No silent all-project default for managed connections.
 
 ## §V INVARIANTS
-V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0.
+V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures additionally preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
 V2: ∀ search hit → engine-backed `id,type,title,path,span,hash,text`; no evidence → explicit refusal. ⊥ generated answer.
 V3: Writes use Engine global store; imported sessions remain raw sessions. No automatic source intake or promotion.
 V4: `query` read-only & row-capped by engine; text result CSV.

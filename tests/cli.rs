@@ -90,6 +90,24 @@ fn assert_json_error(out: &Output, value: &Value, label: &str) {
     );
 }
 
+fn assert_search_error(out: &Output, value: &Value, code: &str, label: &str) {
+    assert_eq!(out.status.code(), Some(2), "{label}: {out:?}");
+    assert!(out.stderr.is_empty(), "{label}: unexpected stderr: {out:?}");
+    assert_eq!(
+        value.as_object().map(|object| object.len()),
+        Some(3),
+        "{label}: {value}"
+    );
+    assert_eq!(value["ok"], false, "{label}: {value}");
+    assert_eq!(value["code"], code, "{label}: {value}");
+    assert!(
+        value["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty()),
+        "{label}: {value}"
+    );
+}
+
 fn omp_fixture(path: &Path, id: &str) -> Vec<u8> {
     let timestamp = "2026-10-21T08:00:00.000Z";
     let events = [
@@ -743,7 +761,156 @@ fn note_query_model_state_and_semantic_errors_use_engine_results() {
         &mut bin(&home, &cwd).args(["search", "credential", "--mode", "semantic", "--json"]),
         "semantic search without installed model",
     );
-    assert_json_error(&semantic, &error, "semantic search without model");
+    assert_search_error(
+        &semantic,
+        &error,
+        "MODEL_UNAVAILABLE",
+        "semantic search without model",
+    );
+}
+
+#[test]
+fn search_failure_codes_and_text_recovery_are_preserved_by_cli() {
+    let fixture = Fixture::new();
+    #[cfg(unix)]
+    let home = fixture.dir("home\u{1b}search");
+    #[cfg(not(unix))]
+    let home = fixture.dir("home");
+    let cwd = fixture.dir("workspace");
+    let source = fixture.path().join("search-session.jsonl");
+    omp_fixture(&source, "search-session");
+
+    let init = bin(&home, &cwd).args(["init"]).output().unwrap();
+    assert_success(&init, "init");
+    let (import, report) = json_output(
+        &mut bin(&home, &cwd)
+            .args(["session", "import", "--client", "omp"])
+            .arg(&source)
+            .arg("--json"),
+        "import search fixture",
+    );
+    assert_success(&import, "import search fixture");
+    assert_eq!(report["ok"], true);
+
+    let query = "access secrets";
+    let (refusal, no_evidence) = json_output(
+        &mut bin(&home, &cwd).args(["search", "unknown-unrelated-phrase", "--json"]),
+        "unknown text search",
+    );
+    assert_success(
+        &refusal,
+        "unknown text search is a refusal, not an engine failure",
+    );
+    assert!(
+        refusal.stderr.is_empty(),
+        "unexpected refusal stderr: {refusal:?}"
+    );
+    assert_eq!(no_evidence["ok"], true);
+    assert_eq!(no_evidence["refused"], true);
+    assert!(no_evidence.get("code").is_none());
+    assert!(no_evidence.get("error").is_none());
+
+    let (unavailable, model_error) = json_output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "semantic", "--json"]),
+        "semantic search without installed model",
+    );
+    assert_search_error(
+        &unavailable,
+        &model_error,
+        "MODEL_UNAVAILABLE",
+        "semantic search without installed model",
+    );
+
+    let (recovered, evidence) = json_output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "text", "--json"]),
+        "text search after semantic model failure",
+    );
+    assert_success(&recovered, "text search after semantic model failure");
+    assert!(
+        recovered.stderr.is_empty(),
+        "unexpected recovery stderr: {recovered:?}"
+    );
+    assert_eq!(evidence["ok"], true);
+    assert_eq!(evidence["refused"], false);
+    let hit = evidence["hits"][0].as_object().expect("cited text hit");
+    assert!(hit.get("path").and_then(Value::as_str).is_some());
+    assert!(hit.get("hash").and_then(Value::as_str).is_some());
+    assert!(hit.get("span").and_then(Value::as_array).is_some());
+
+    let (status, model_state) = json_output(
+        &mut bin(&home, &cwd).args(["model", "status", "--json"]),
+        "model status before corrupt-model search",
+    );
+    assert_success(&status, "model status before corrupt-model search");
+    let model_dir = PathBuf::from(
+        model_state["path"]
+            .as_str()
+            .expect("model status provides its asset directory"),
+    );
+    fs::create_dir_all(&model_dir).expect("create corrupt model directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&model_dir, fs::Permissions::from_mode(0o700))
+            .expect("make corrupt model directory private");
+    }
+    let manifest = model_dir.join("manifest.json");
+    fs::write(&manifest, b"corrupt model manifest").expect("write corrupt model manifest");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600))
+            .expect("make corrupt model manifest private");
+    }
+    let (corrupt, corrupt_error) = json_output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "semantic", "--json"]),
+        "semantic search with corrupt model manifest",
+    );
+    assert_search_error(
+        &corrupt,
+        &corrupt_error,
+        "MODEL_UNAVAILABLE",
+        "semantic search with corrupt model manifest",
+    );
+
+    let (recovered, evidence) = json_output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "text", "--json"]),
+        "text search after corrupt semantic model",
+    );
+    assert_success(&recovered, "text search after corrupt semantic model");
+    assert_eq!(evidence["ok"], true);
+    assert_eq!(evidence["refused"], false);
+    let source_path = evidence["hits"][0]["path"]
+        .as_str()
+        .expect("text hit has a canonical source path");
+    fs::remove_file(home.join("store").join(source_path))
+        .expect("remove canonical source to force an unrelated search failure");
+
+    let (failed, search_error) = json_output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "text", "--json"]),
+        "text search with unavailable canonical source",
+    );
+    assert_search_error(
+        &failed,
+        &search_error,
+        "SEARCH_FAILED",
+        "text search with unavailable canonical source",
+    );
+
+    let text_failure = output(
+        &mut bin(&home, &cwd).args(["search", query, "--mode", "text"]),
+        "text search diagnostic with terminal control in path",
+    );
+    assert_eq!(text_failure.status.code(), Some(2), "{text_failure:?}");
+    assert!(text_failure.stdout.is_empty(), "{text_failure:?}");
+    assert!(
+        !text_failure.stderr.contains(&0x1b),
+        "search diagnostic contains an active ESC sequence: {text_failure:?}"
+    );
+    let stderr = String::from_utf8(text_failure.stderr).expect("UTF-8 search diagnostic");
+    assert!(stderr.contains("noesora: SEARCH_FAILED"), "{stderr:?}");
+    #[cfg(unix)]
+    assert!(stderr.contains("home�search"), "{stderr:?}");
 }
 
 #[test]
@@ -900,6 +1067,14 @@ fn json_clap_and_runtime_failures_are_parseable_and_nonzero() {
         "clap error",
     );
     assert_json_error(&parse, &error, "clap parse error");
+    assert!(error.get("code").is_none());
+
+    let (invalid_search, error) = json_output(
+        &mut bin(&home, &cwd).args(["search", "access secrets", "--limit", "0", "--json"]),
+        "invalid search limit",
+    );
+    assert_json_error(&invalid_search, &error, "invalid search limit");
+    assert!(error.get("code").is_none());
 
     let missing = cwd.join("missing.jsonl");
     let (runtime, error) = json_output(
@@ -910,6 +1085,7 @@ fn json_clap_and_runtime_failures_are_parseable_and_nonzero() {
         "missing session import",
     );
     assert_json_error(&runtime, &error, "session import runtime error");
+    assert!(error.get("code").is_none());
 }
 
 #[test]

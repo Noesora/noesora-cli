@@ -496,7 +496,7 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
                     }
                     exit
                 }
-                Err(err) => fail(json_output, err),
+                Err(err) => fail_search(json_output, err),
             }
         }
         Command::Note {
@@ -843,4 +843,19 @@ fn fail(json_output: bool, err: impl std::fmt::Display) -> ExitCode {
         let _ = writeln!(io::stderr(), "noesora: {message}");
     }
     ExitCode::from(2)
+}
+
+fn fail_search(json_output: bool, err: noesora_engine::SearchError) -> ExitCode {
+    if json_output {
+        let code = err.code();
+        let payload = json!({
+            "ok": false,
+            "code": code,
+            "error": err.to_string(),
+        });
+        println!("{payload}");
+        ExitCode::from(2)
+    } else {
+        fail(false, err)
+    }
 }
