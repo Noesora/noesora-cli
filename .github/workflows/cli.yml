@@ -1,0 +1,27 @@
+name: Public source checks
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install Rust formatter
+        run: rustup toolchain install stable --profile minimal --component rustfmt --no-self-update
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Format public source
+        run: rustfmt --edition 2021 --check src/main.rs tests/cli.rs tests/mcp.rs
+      - name: Check smoke-driver syntax
+        run: node --check scripts/smoke.mjs
+      - name: Explain private integration gate
+        run: echo "Full behavior and local-model checks run in the private Engine Trusted CLI workflow against this exact CLI SHA and .github/engine-revision. Public format checks are not that gate."

@@ -1,36 +1,38 @@
-//! `noesora mcp`: stdio MCP server over the engine for the user-global default vault.
+//! MCP stdio adapter over the user-global Noesora store.
 //!
-//! Stdout carries protocol frames only; every diagnostic goes to stderr. The vault comes from
-//! `~/.noesora/config.json` and never from the host's working directory.
+//! Stdout is reserved for MCP protocol frames; startup failures and diagnostics go to stderr.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 
-use noesora_engine::index;
-use noesora_engine::record::{self, RecordError, RecordStatus};
+use noesora_engine::{
+    Client, ContentScope, RecordInput, SearchFilters, SearchMode, SearchResponse, Store,
+};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig},
     schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
-use crate::cli::{OkQuery, OkSearch};
-use crate::config;
+use crate::{config, memory_policy::MemoryPolicy};
 
-const INSTRUCTIONS: &str = "Noesora local vault. `search` returns cited records or an explicit \
-refusal, with `truncated` indicating omitted ranked matches; `query` runs one read-only SQL SELECT \
-over the index; `note` and `handoff` write durable records to the configured vault.";
-
+const OWNER_INSTRUCTIONS: &str = "Noesora local archive. Search returns source-cited evidence or an explicit no-evidence refusal; query is read-only; notes and handoffs write approved records; session tools read raw imported history. Owner connections use the global NOESORA_HOME store.";
+const PROJECT_READ_ONLY_INSTRUCTIONS: &str = "Noesora managed MCP connection. Read-only access is limited to the exact configured project. Only search, session_list, and session_read are available; SQL and approved-record writes are disabled. All tools use the global NOESORA_HOME store.";
+const ALL_READ_ONLY_INSTRUCTIONS: &str = "Noesora managed MCP connection. Read-only access spans all projects only because this connection explicitly selected --all-projects. Only search, session_list, and session_read are available; SQL and approved-record writes are disabled. All tools use the global NOESORA_HOME store.";
 const EMPTY_SECTION: &str = "None";
 
-pub fn run() -> ExitCode {
-    let vault = match config::home_dir().and_then(|home| config::load_default_vault(&home)) {
-        Ok(vault) => vault,
+pub fn run(policy: MemoryPolicy) -> ExitCode {
+    let store = match config::open_store() {
+        Ok(store) => store,
         Err(err) => return fail(err),
     };
+    if let Err(err) = config::require_json_safe_store(&store) {
+        return fail(err);
+    }
+
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -38,19 +40,20 @@ pub fn run() -> ExitCode {
         Ok(runtime) => runtime,
         Err(err) => return fail(err),
     };
-    match runtime.block_on(serve(vault)) {
+    match runtime.block_on(serve(store, policy)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => fail(err),
     }
 }
 
 fn fail(err: impl std::fmt::Display) -> ExitCode {
-    let _ = writeln!(io::stderr(), "noesora: {err}");
+    let message = crate::cli::clean_terminal(&err.to_string());
+    let _ = writeln!(io::stderr(), "noesora: {message}");
     ExitCode::from(2)
 }
 
-async fn serve(vault: PathBuf) -> Result<(), String> {
-    let service = Noesora::new(vault)
+async fn serve(store: Store, policy: MemoryPolicy) -> Result<(), String> {
+    let service = Noesora::new(store, policy)
         .serve(rmcp::transport::stdio())
         .await
         .map_err(|err| err.to_string())?;
@@ -60,20 +63,35 @@ async fn serve(vault: PathBuf) -> Result<(), String> {
 
 #[derive(Clone)]
 pub(crate) struct Noesora {
-    vault: PathBuf,
+    store: Store,
+    policy: MemoryPolicy,
     tool_router: ToolRouter<Self>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct SearchArgs {
-    /// Words to look up in the vault's records.
+    /// Query text.
     query: String,
+    /// text (default) or semantic.
+    #[serde(default = "default_search_mode")]
+    mode: String,
+    /// Optional project filter; managed project mode rejects filters outside its exact scope.
+    #[serde(default)]
+    project: Option<String>,
+    /// Optional source client: omp, claude-code, codex, grok, opencode, or cursor-agent.
+    #[serde(default)]
+    client: Option<String>,
+    /// conversation (default), tools, or all.
+    #[serde(default = "default_search_scope")]
+    scope: String,
+    /// Maximum ranked hits, default 10.
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct QueryArgs {
-    /// One read-only SELECT or WITH statement over the index, for example
-    /// `SELECT title, status FROM records`.
+    /// One read-only SQL statement, for example SELECT count(*) FROM sessions.
     sql: String,
 }
 
@@ -90,6 +108,9 @@ struct NoteArgs {
     /// Paths this note is about.
     #[serde(default)]
     files: Vec<String>,
+    /// Optional project metadata.
+    #[serde(default)]
+    project: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -114,73 +135,144 @@ struct HandoffArgs {
     /// open (default), done, or blocked.
     #[serde(default)]
     status: Option<String>,
+    /// Optional project metadata.
+    #[serde(default)]
+    project: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct SessionListArgs {
+    /// Optional project filter; managed connections cannot widen their configured scope.
+    #[serde(default)]
+    project: Option<String>,
+    /// Zero-based session offset.
+    #[serde(default)]
+    offset: usize,
+    /// Maximum sessions to return.
+    #[serde(default = "default_session_limit")]
+    limit: usize,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct SessionReadArgs {
+    /// Stable session identifier returned by session_list or search.
+    id: String,
+    /// Zero-based message offset.
+    #[serde(default)]
+    offset: usize,
+    /// Maximum messages to return.
+    #[serde(default = "default_message_limit")]
+    limit: usize,
+}
+
+fn default_search_mode() -> String {
+    "text".to_owned()
+}
+fn default_search_scope() -> String {
+    "conversation".to_owned()
+}
+fn default_session_limit() -> usize {
+    50
+}
+fn default_message_limit() -> usize {
+    40
 }
 
 #[tool_router]
 impl Noesora {
-    pub(crate) fn new(vault: PathBuf) -> Self {
+    pub(crate) fn new(store: Store, policy: MemoryPolicy) -> Self {
+        let mut tool_router = Self::tool_router();
+        if policy.managed() {
+            for name in ["query", "note", "handoff"] {
+                tool_router.disable_route(name);
+            }
+        }
         Self {
-            vault,
-            tool_router: Self::tool_router(),
+            store,
+            policy,
+            tool_router,
         }
     }
 
     #[tool(
-        description = "Search the vault's records. Returns cited hits (id, type, title, path, \
-span, hash, text), `truncated` for omitted ranked hits, or an explicit refusal with reason \
-no_evidence and `truncated: false`."
+        description = "Search the archive within the connection's authorized project scope for cited evidence. Returns engine SearchHit fields (id, type, title, project, client, session_id, role, path, span, hash, text), refusal reason, index coverage and truncation state."
     )]
     async fn search(&self, Parameters(args): Parameters<SearchArgs>) -> CallToolResult {
+        let policy = self.policy.clone();
         let result = self
-            .blocking(move |root| {
-                let found = index::search(root, &args.query).map_err(|err| err.to_string())?;
-                structured(&OkSearch::from_result("search", found))
+            .blocking(move |store| {
+                let project = policy.filter_project(args.project.as_deref())?;
+                let mode = SearchMode::from_str(&args.mode)?;
+                let scope = ContentScope::from_str(&args.scope)?;
+                let client = args.client.as_deref().map(Client::from_str).transpose()?;
+                let filters = SearchFilters {
+                    project,
+                    client,
+                    scope,
+                    limit: args.limit.unwrap_or(10),
+                };
+                let found = store
+                    .search(&args.query, mode, &filters)
+                    .map_err(|err| err.to_string())?;
+                structured(&search_payload(found))
             })
             .await;
         respond(result)
     }
 
     #[tool(
-        description = "Run one read-only SQL query against the vault index. Content is CSV; \
-structured content has columns, rows and truncated. Writes are rejected."
+        description = "Run one read-only SQL query against the global store. Text content is row-capped CSV; structured content has columns, rows and truncated."
     )]
     async fn query(&self, Parameters(args): Parameters<QueryArgs>) -> CallToolResult {
+        if !self.policy.owner_tools() {
+            return managed_tool_denied();
+        }
         let result = self
-            .blocking(move |root| {
-                let rows = index::query(root, &args.sql).map_err(|err| err.to_string())?;
+            .blocking(move |store| {
+                let rows = store.query(&args.sql).map_err(|err| err.to_string())?;
                 let csv = rows.csv();
-                let value = serde_json::to_value(OkQuery::from_result(rows))
-                    .map_err(|err| err.to_string())?;
-                let mut result = CallToolResult::success(vec![ContentBlock::text(csv)]);
-                result.structured_content = Some(value);
-                Ok(result)
+                let payload = with_command("query", rows);
+                let mut response = CallToolResult::success(vec![ContentBlock::text(csv)]);
+                response.structured_content = Some(payload);
+                Ok(response)
             })
             .await;
         respond(result)
     }
 
-    #[tool(description = "Write a durable note record into the vault.")]
+    #[tool(description = "Write a durable approved note record into the global store.")]
     async fn note(&self, Parameters(args): Parameters<NoteArgs>) -> CallToolResult {
+        if !self.policy.owner_tools() {
+            return managed_tool_denied();
+        }
         let result = self
-            .blocking(move |root| {
-                let status = parse_status(args.status.as_deref(), RecordStatus::Open)?;
-                let written =
-                    record::write_note(root, &args.title, &args.body, status, &args.files)
-                        .map_err(|err| err.to_string())?;
-                written_result("note", &written)
+            .blocking(move |store| {
+                let status = parse_status(args.status.as_deref(), "open")?;
+                let input = RecordInput {
+                    title: args.title,
+                    body: args.body,
+                    kind: "note".to_owned(),
+                    status,
+                    project: args.project.unwrap_or_else(|| "local".to_owned()),
+                    files: args.files,
+                };
+                let written = store.write_record(&input).map_err(|err| err.to_string())?;
+                structured(&written_payload("note", written))
             })
             .await;
         respond(result)
     }
 
     #[tool(
-        description = "Write a handoff record for the next session: goal, outcome, files, dead \
-ends and next steps. Empty sections are stored as None."
+        description = "Write a durable handoff record with fixed Goal, Outcome, Files, Dead ends, and Next sections. Empty sections are stored as None."
     )]
     async fn handoff(&self, Parameters(args): Parameters<HandoffArgs>) -> CallToolResult {
+        if !self.policy.owner_tools() {
+            return managed_tool_denied();
+        }
         let result = self
-            .blocking(move |root| {
-                let status = parse_status(args.status.as_deref(), RecordStatus::Done)?;
+            .blocking(move |store| {
+                let status = parse_status(args.status.as_deref(), "done")?;
                 let files = clean_items(&args.files);
                 let body = handoff_body(
                     &args.goal,
@@ -189,36 +281,82 @@ ends and next steps. Empty sections are stored as None."
                     &args.dead_ends,
                     &args.next,
                 );
-                let written = record::write_handoff(root, &args.title, &body, status, &files)
-                    .map_err(|err| err.to_string())?;
-                written_result("handoff", &written)
+                let input = RecordInput {
+                    title: args.title,
+                    body,
+                    kind: "handoff".to_owned(),
+                    status,
+                    project: args.project.unwrap_or_else(|| "local".to_owned()),
+                    files,
+                };
+                let written = store.write_record(&input).map_err(|err| err.to_string())?;
+                structured(&written_payload("handoff", written))
             })
             .await;
         respond(result)
     }
 
-    /// Runs engine work off the protocol thread, always against the configured vault. The vault
-    /// is revalidated first so a vault removed mid-session can never resolve to a parent vault.
+    #[tool(
+        description = "List raw session history within the connection's authorized project scope, paged by session offset."
+    )]
+    async fn session_list(&self, Parameters(args): Parameters<SessionListArgs>) -> CallToolResult {
+        let policy = self.policy.clone();
+        let result = self
+            .blocking(move |store| {
+                let project = policy.filter_project(args.project.as_deref())?;
+                let sessions = store
+                    .sessions(project.as_deref(), args.offset, args.limit)
+                    .map_err(|err| err.to_string())?;
+                structured(&json!({
+                    "ok": true,
+                    "command": "session list",
+                    "sessions": sessions,
+                    "offset": args.offset,
+                    "limit": args.limit,
+                }))
+            })
+            .await;
+        respond(result)
+    }
+
+    #[tool(
+        description = "Read one page of a raw session transcript within the connection's authorized project scope; this does not create an approved record."
+    )]
+    async fn session_read(&self, Parameters(args): Parameters<SessionReadArgs>) -> CallToolResult {
+        let policy = self.policy.clone();
+        let result = self
+            .blocking(move |store| {
+                let page =
+                    read_session_for_policy(&store, &policy, &args.id, args.offset, args.limit)?;
+                structured(&with_command("session read", page))
+            })
+            .await;
+        respond(result)
+    }
+
+    /// Run engine work away from the MCP protocol executor.
     async fn blocking<T, F>(&self, work: F) -> Result<T, String>
     where
         T: Send + 'static,
-        F: FnOnce(&Path) -> Result<T, String> + Send + 'static,
+        F: FnOnce(Store) -> Result<T, String> + Send + 'static,
     {
-        let vault = self.vault.clone();
-        tokio::task::spawn_blocking(move || {
-            let root = config::validate_vault(&vault).map_err(|err| err.to_string())?;
-            work(&root)
-        })
-        .await
-        .map_err(|err| err.to_string())?
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || work(store))
+            .await
+            .map_err(|err| err.to_string())?
     }
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Noesora {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(INSTRUCTIONS)
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            match &self.policy {
+                MemoryPolicy::Owner => OWNER_INSTRUCTIONS,
+                MemoryPolicy::ProjectReadOnly(_) => PROJECT_READ_ONLY_INSTRUCTIONS,
+                MemoryPolicy::AllReadOnly => ALL_READ_ONLY_INSTRUCTIONS,
+            },
+        )
     }
 }
 
@@ -227,32 +365,91 @@ fn respond(result: Result<CallToolResult, String>) -> CallToolResult {
         CallToolResult::structured_error(json!({"ok": false, "error": error}))
     })
 }
+fn managed_tool_denied() -> CallToolResult {
+    CallToolResult::structured_error(json!({
+        "ok": false,
+        "error": "this tool is unavailable in managed read-only mode",
+    }))
+}
+
+fn read_session_for_policy(
+    store: &Store,
+    policy: &MemoryPolicy,
+    id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<noesora_engine::TranscriptPage, String> {
+    const UNAVAILABLE: &str = "session is not available in this managed memory scope";
+
+    match policy {
+        MemoryPolicy::Owner => store
+            .read_session(id, offset, limit)
+            .map_err(|err| err.to_string()),
+        MemoryPolicy::ProjectReadOnly(project) => store
+            .read_session_in_project(id, project, offset, limit)
+            .map_err(|_| UNAVAILABLE.to_owned()),
+        MemoryPolicy::AllReadOnly => store
+            .read_session(id, offset, limit)
+            .map_err(|_| UNAVAILABLE.to_owned()),
+    }
+}
 
 fn structured<T: Serialize>(payload: &T) -> Result<CallToolResult, String> {
     let value = serde_json::to_value(payload).map_err(|err| err.to_string())?;
     Ok(CallToolResult::structured(value))
 }
 
-fn written_result(
-    command: &'static str,
-    written: &record::WrittenNote,
-) -> Result<CallToolResult, String> {
-    structured(&json!({
+fn with_command<T: Serialize>(command: &'static str, payload: T) -> Value {
+    match serde_json::to_value(payload) {
+        Ok(Value::Object(mut object)) => {
+            object.insert("ok".to_owned(), Value::Bool(true));
+            object.insert("command".to_owned(), Value::String(command.to_owned()));
+            Value::Object(object)
+        }
+        Ok(value) => json!({"ok": true, "command": command, "payload": value}),
+        Err(err) => json!({"ok": false, "error": err.to_string()}),
+    }
+}
+
+fn search_payload(response: SearchResponse) -> Value {
+    let reason = if response.refused {
+        Some(response.reason.unwrap_or_else(|| "no_evidence".to_owned()))
+    } else {
+        response.reason
+    };
+    json!({
+        "ok": true,
+        "command": "search",
+        "hits": response.hits,
+        "refused": response.refused,
+        "reason": reason,
+        "truncated": response.truncated,
+        "mode": response.mode,
+        "total_chunks": response.total_chunks,
+        "embedded_chunks": response.embedded_chunks,
+        "index_complete": response.index_complete,
+    })
+}
+
+fn written_payload(command: &'static str, written: noesora_engine::WrittenRecord) -> Value {
+    json!({
         "ok": true,
         "command": command,
         "id": written.id,
-        "path": written.path.display().to_string(),
-        "vault": written.vault.display().to_string(),
-    }))
+        "path": written.path,
+        "kind": written.kind,
+        "project": written.project,
+    })
 }
 
-fn parse_status(status: Option<&str>, default: RecordStatus) -> Result<RecordStatus, String> {
-    let status = status.unwrap_or(match default {
-        RecordStatus::Open => "open",
-        RecordStatus::Done => "done",
-        RecordStatus::Blocked => "blocked",
-    });
-    RecordStatus::parse(status).ok_or_else(|| RecordError::InvalidStatus.to_string())
+fn parse_status(status: Option<&str>, default: &'static str) -> Result<String, String> {
+    let status = status.unwrap_or(default);
+    match status {
+        "open" | "done" | "blocked" => Ok(status.to_owned()),
+        _ => Err(format!(
+            "invalid record status {status:?}; use open, done or blocked"
+        )),
+    }
 }
 
 fn clean_items(items: &[String]) -> Vec<String> {
@@ -265,15 +462,15 @@ fn clean_items(items: &[String]) -> Vec<String> {
 
 fn prose_section(text: &str) -> String {
     match text.trim() {
-        "" => EMPTY_SECTION.to_string(),
-        text => text.to_string(),
+        "" => EMPTY_SECTION.to_owned(),
+        text => text.to_owned(),
     }
 }
 
 fn list_section(items: &[String]) -> String {
     let items = clean_items(items);
     if items.is_empty() {
-        return EMPTY_SECTION.to_string();
+        return EMPTY_SECTION.to_owned();
     }
     items
         .iter()
@@ -282,7 +479,7 @@ fn list_section(items: &[String]) -> String {
         .join("\n")
 }
 
-/// Fixed section order so every handoff reads the same: Goal, Outcome, Files, Dead ends, Next.
+/// Fixed section order keeps handoffs scannable by the next session.
 fn handoff_body(
     goal: &str,
     outcome: &str,

@@ -1,22 +1,19 @@
-use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::config::{self, ConfigError};
-use crate::mcp;
-use clap::{CommandFactory, Parser, Subcommand};
-use noesora_engine::candidate;
-use noesora_engine::index::{self, IndexError, SearchResult};
-use noesora_engine::record::{self, RecordError, RecordStatus};
-use noesora_engine::vault::{self, VaultError};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use noesora_engine::{Client, ContentScope, RecordInput, SearchFilters, SearchMode, Store};
 use serde::Serialize;
+use serde_json::{json, Value};
+
+use crate::{config, mcp, memory_policy::MemoryPolicy};
 
 #[derive(Parser)]
 #[command(
     name = "noesora",
     version,
-    about = "Local-first shared context for people and agents."
+    about = "Local-first session workspace and cited search."
 )]
 struct Cli {
     /// Machine-readable output.
@@ -28,17 +25,53 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a vault in this directory.
-    Init {
-        /// Directory for the vault (default: current directory).
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    /// Show the nearest vault.
+    /// Initialize the user-global store.
+    Init,
+    /// Show status for the user-global store.
     Status,
-    /// Write a durable note into the vault.
+    /// Manage imported raw session history.
+    Session {
+        #[command(subcommand)]
+        action: SessionCommand,
+    },
+    /// Manage explicitly enabled source roots.
+    Source {
+        #[command(subcommand)]
+        action: SourceCommand,
+    },
+    /// Import only configured, enabled source roots.
+    Sync,
+    /// Inspect or explicitly install the local embedding model.
+    Model {
+        #[command(subcommand)]
+        action: ModelCommand,
+    },
+    /// Build pending local semantic embeddings.
+    Index,
+    /// Rebuild derived store data from canonical snapshots and records.
+    Rebuild,
+    /// Import existing Markdown records without modifying their originals.
+    ImportVault { path: PathBuf },
+    /// Search local evidence with source citations.
+    Search {
+        /// Text or semantic retrieval over the local store.
+        query: String,
+        #[arg(long, value_enum, default_value = "text")]
+        mode: SearchModeArg,
+        /// Restrict to one project; all projects are searched by default.
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, value_enum)]
+        client: Option<SearchClientArg>,
+        #[arg(long, value_enum, default_value = "conversation")]
+        scope: ContentScopeArg,
+        /// Maximum returned passages, between 1 and 100.
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u16).range(1..=100))]
+        limit: u16,
+    },
+    /// Write a durable approved note.
     Note {
-        /// One-line title (required).
+        /// One-line title.
         #[arg(long)]
         title: String,
         /// open, done, or blocked.
@@ -47,136 +80,155 @@ enum Command {
         /// Paths this note is about.
         #[arg(long = "file")]
         files: Vec<String>,
+        /// Optional project metadata.
+        #[arg(long)]
+        project: Option<String>,
         /// Note body.
         body: Vec<String>,
     },
-    /// Search local records with citations or refuse when evidence is missing.
-    Search { query: String },
-    /// Run one read-only SQL query against the local index.
+    /// Run one read-only, row-capped SQL query and print CSV.
     Query { sql: String },
-    /// Serve search, query, note and handoff over stdio MCP for the global default vault.
-    Mcp,
-    /// Import a caller-selected transcript into the nearest vault as an unindexed candidate.
-    Candidate {
-        #[command(subcommand)]
-        action: CandidateCommand,
+    /// Serve shared engine tools over MCP stdio.
+    Mcp {
+        /// Restrict this MCP connection to an explicit read-only memory scope.
+        #[arg(long)]
+        managed: bool,
+        /// Exact persisted project identity exposed by this managed connection.
+        #[arg(long, requires = "managed", conflicts_with = "all_projects")]
+        project: Option<String>,
+        /// Explicitly expose read-only memory across all projects.
+        #[arg(
+            long = "all-projects",
+            requires = "managed",
+            conflicts_with = "project"
+        )]
+        all_projects: bool,
     },
-    /// Browse the nearest vault in a read-only terminal workspace.
+    /// Browse local memory in the terminal.
     Tui,
-    /// Manage the user-global default vault used by MCP.
-    Vault {
-        #[command(subcommand)]
-        action: VaultCommand,
-    },
 }
 
 #[derive(Subcommand)]
-enum VaultCommand {
-    /// Validate a vault and make it the global default for MCP.
-    Use {
-        /// Vault root (the directory holding `.noesora/vault.json`).
+enum SessionCommand {
+    /// Explicitly archive one session JSONL file.
+    Import {
+        #[arg(long, value_enum)]
+        client: IntakeClientArg,
         path: PathBuf,
     },
+    /// List global sessions, optionally filtered by project.
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "0")]
+        offset: usize,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Read one paged raw transcript.
+    Show {
+        id: String,
+        #[arg(long, default_value = "0")]
+        offset: usize,
+        #[arg(long, default_value = "40")]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
-enum CandidateCommand {
-    /// Import a transcript file the caller has confirmed is complete.
-    Import { path: PathBuf },
+enum SourceCommand {
+    /// Add an explicitly enabled session source root.
+    Add {
+        #[arg(long, value_enum)]
+        client: IntakeClientArg,
+        path: PathBuf,
+    },
+    /// List enabled and disabled source roots.
+    List,
 }
 
-#[derive(Serialize)]
-struct OkInit {
-    ok: bool,
-    command: &'static str,
-    vault: String,
+#[derive(Subcommand)]
+enum ModelCommand {
+    /// Explicitly install the pinned local embedding model assets.
+    Install,
+    /// Inspect local model availability without network access.
+    Status,
 }
 
-#[derive(Serialize)]
-struct OkStatus {
-    ok: bool,
-    command: &'static str,
-    vault: String,
-    version: u32,
-    created_at: String,
+#[derive(Clone, Copy, ValueEnum)]
+enum IntakeClientArg {
+    Omp,
+    #[value(name = "claude-code")]
+    ClaudeCode,
+    Codex,
 }
 
-#[derive(Serialize)]
-struct OkNote {
-    ok: bool,
-    command: &'static str,
-    id: String,
-    path: String,
-    vault: String,
-}
-
-#[derive(Serialize)]
-pub(crate) struct OkSearch {
-    pub(crate) ok: bool,
-    pub(crate) command: &'static str,
-    pub(crate) hits: Vec<index::SearchHit>,
-    pub(crate) refused: bool,
-    pub(crate) truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<&'static str>,
-}
-
-impl OkSearch {
-    pub(crate) fn from_result(command: &'static str, result: SearchResult) -> Self {
-        let (hits, reason, truncated) = match result {
-            SearchResult::Hits { hits, truncated } => (hits, None, truncated),
-            SearchResult::Refused => (Vec::new(), Some("no_evidence"), false),
-        };
-        OkSearch {
-            ok: true,
-            command,
-            hits,
-            refused: reason.is_some(),
-            reason,
-            truncated,
+impl From<IntakeClientArg> for Client {
+    fn from(value: IntakeClientArg) -> Self {
+        match value {
+            IntakeClientArg::Omp => Self::Omp,
+            IntakeClientArg::ClaudeCode => Self::ClaudeCode,
+            IntakeClientArg::Codex => Self::Codex,
         }
     }
 }
 
-#[derive(Serialize)]
-pub(crate) struct OkQuery {
-    pub(crate) ok: bool,
-    pub(crate) command: &'static str,
-    pub(crate) columns: Vec<String>,
-    pub(crate) rows: Vec<Vec<String>>,
-    pub(crate) truncated: bool,
+#[derive(Clone, Copy, ValueEnum)]
+enum SearchClientArg {
+    Omp,
+    #[value(name = "claude-code")]
+    ClaudeCode,
+    Codex,
+    Grok,
+    #[value(name = "opencode")]
+    OpenCode,
+    #[value(name = "cursor-agent")]
+    Cursor,
 }
 
-impl OkQuery {
-    pub(crate) fn from_result(result: index::QueryResult) -> Self {
-        let index::QueryResult {
-            columns,
-            rows,
-            truncated,
-        } = result;
-        OkQuery {
-            ok: true,
-            command: "query",
-            columns,
-            rows,
-            truncated,
+impl From<SearchClientArg> for Client {
+    fn from(value: SearchClientArg) -> Self {
+        match value {
+            SearchClientArg::Omp => Self::Omp,
+            SearchClientArg::ClaudeCode => Self::ClaudeCode,
+            SearchClientArg::Codex => Self::Codex,
+            SearchClientArg::Grok => Self::Grok,
+            SearchClientArg::OpenCode => Self::OpenCode,
+            SearchClientArg::Cursor => Self::Cursor,
         }
     }
 }
 
-#[derive(Serialize)]
-struct OkVaultUse {
-    ok: bool,
-    command: &'static str,
-    vault: String,
-    config: String,
+#[derive(Clone, Copy, ValueEnum)]
+enum SearchModeArg {
+    Text,
+    Semantic,
 }
 
-#[derive(Serialize)]
-struct OkCandidateImport {
-    ok: bool,
-    command: &'static str,
-    path: String,
+impl From<SearchModeArg> for SearchMode {
+    fn from(value: SearchModeArg) -> Self {
+        match value {
+            SearchModeArg::Text => Self::Text,
+            SearchModeArg::Semantic => Self::Semantic,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ContentScopeArg {
+    Conversation,
+    Tools,
+    All,
+}
+
+impl From<ContentScopeArg> for ContentScope {
+    fn from(value: ContentScopeArg) -> Self {
+        match value {
+            ContentScopeArg::Conversation => Self::Conversation,
+            ContentScopeArg::Tools => Self::Tools,
+            ContentScopeArg::All => Self::All,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -191,237 +243,604 @@ pub fn run() -> ExitCode {
         Err(err) => return clap_error(err),
     };
     let json = cli.json;
-    match cli.command {
-        None => {
-            let _ = Cli::command().print_help();
-            ExitCode::SUCCESS
-        }
-        Some(Command::Init { path }) => match vault::init_vault(&path) {
-            Ok(root) => {
-                emit_ok(
-                    json,
-                    OkInit {
-                        ok: true,
-                        command: "init",
-                        vault: root.display().to_string(),
-                    },
-                    format!("Created vault at {}", root.display()),
-                );
-                ExitCode::SUCCESS
-            }
+    let Some(command) = cli.command else {
+        let _ = Cli::command().print_help();
+        return ExitCode::SUCCESS;
+    };
+
+    match command {
+        Command::Mcp {
+            managed,
+            project,
+            all_projects,
+        } => match mcp_memory_policy(managed, project, all_projects) {
+            Ok(policy) => mcp::run(policy),
             Err(err) => fail(json, err),
         },
-        Some(Command::Status) => match status() {
-            Ok((root, record)) => {
-                emit_ok(
-                    json,
-                    OkStatus {
-                        ok: true,
-                        command: "status",
-                        vault: root.display().to_string(),
-                        version: record.version,
-                        created_at: record.created_at.clone(),
-                    },
-                    format!(
-                        "Vault {}\nversion {}  created {}",
-                        root.display(),
-                        record.version,
-                        record.created_at
-                    ),
-                );
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(json, err),
-        },
-        Some(Command::Note {
-            title,
-            status,
-            files,
-            body,
-        }) => match note(title, status, files, body) {
-            Ok(written) => {
-                emit_ok(
-                    json,
-                    OkNote {
-                        ok: true,
-                        command: "note",
-                        id: written.id.clone(),
-                        path: written.path.display().to_string(),
-                        vault: written.vault.display().to_string(),
-                    },
-                    format!("Wrote note {} at {}", written.id, written.path.display()),
-                );
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(json, err),
-        },
-        Some(Command::Search { query }) => match search(&query) {
-            Ok(result) => {
-                let payload = OkSearch::from_result("search", result);
-                let truncated = payload.truncated;
-                if json {
-                    println!("{}", serde_json::to_string(&payload).expect("json"));
-                } else if payload.refused {
-                    println!("Refused: no evidence found.");
-                } else {
-                    for hit in payload.hits {
-                        println!(
-                            "{} [{}] {}:{} {}\nID: {}\n{}",
-                            hit.title, hit.kind, hit.path, hit.span, hit.hash, hit.id, hit.text
-                        );
-                    }
-                    if truncated {
-                        let _ = writeln!(
-                            io::stderr(),
-                            "noesora: search results capped at {} hits; more matches exist",
-                            index::SEARCH_HIT_CAP
-                        );
-                    }
-                }
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(json, err),
-        },
-        Some(Command::Mcp) => mcp::run(),
-        Some(Command::Tui) => {
+        Command::Tui => {
             if json {
-                fail(true, "the tui command does not support --json")
-            } else {
-                match crate::tui::run() {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(err) => fail(false, err),
-                }
+                return fail(true, "the tui command does not support --json");
+            }
+            match config::open_store().and_then(crate::tui::run) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => fail(false, err),
             }
         }
-        Some(Command::Query { sql }) => match query(&sql) {
-            Ok(result) => {
+        command => match config::open_store() {
+            Ok(store) => {
                 if json {
-                    let payload = OkQuery::from_result(result);
-                    println!("{}", serde_json::to_string(&payload).expect("json"));
-                } else {
-                    print!("{}", result.csv());
-                    if result.truncated {
-                        let _ = writeln!(
-                            io::stderr(),
-                            "noesora: result capped at {} rows",
-                            index::QUERY_ROW_CAP
-                        );
+                    if let Err(err) = config::require_json_safe_store(&store) {
+                        return fail(true, err);
                     }
                 }
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(json, err),
-        },
-        Some(Command::Candidate {
-            action: CandidateCommand::Import { path },
-        }) => match candidate_import(&path) {
-            Ok(path) => {
-                emit_ok(
-                    json,
-                    OkCandidateImport {
-                        ok: true,
-                        command: "candidate import",
-                        path: path.display().to_string(),
-                    },
-                    format!("Imported transcript candidate to {}", path.display()),
-                );
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(json, err),
-        },
-        Some(Command::Vault {
-            action: VaultCommand::Use { path },
-        }) => match vault_use(&path) {
-            Ok((root, file)) => {
-                emit_ok(
-                    json,
-                    OkVaultUse {
-                        ok: true,
-                        command: "vault use",
-                        vault: root.display().to_string(),
-                        config: file.display().to_string(),
-                    },
-                    format!("Default vault set to {}", root.display()),
-                );
-                ExitCode::SUCCESS
+                run_store_command(json, store, command)
             }
             Err(err) => fail(json, err),
         },
     }
 }
 
-fn search(query: &str) -> Result<SearchResult, IndexError> {
-    let cwd = std::env::current_dir()?;
-    let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
-    index::search(&root, query)
+fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitCode {
+    match command {
+        Command::Init => match store.status() {
+            Ok(status) => {
+                let text = format!("Initialized Noesora store at {}", status.root.display());
+                let payload = if json_output {
+                    let root = match serde_json::to_value(&status.root) {
+                        Ok(root) => root,
+                        Err(err) => return fail(true, err),
+                    };
+                    json!({"ok": true, "command": "init", "root": root})
+                } else {
+                    Value::Null
+                };
+                emit(json_output, payload, text);
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::Status => match store.status() {
+            Ok(status) => {
+                let text = format_store_status(&status);
+                emit_command(json_output, "status", status, text)
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::Session { action } => match action {
+            SessionCommand::Import { client, path } => {
+                match store.import_session(client.into(), &path) {
+                    Ok(report) => {
+                        let text = format_import(&report);
+                        emit_command(json_output, "session import", report, text)
+                    }
+                    Err(err) => fail(json_output, err),
+                }
+            }
+            SessionCommand::List {
+                project,
+                offset,
+                limit,
+            } => match store.sessions(project.as_deref(), offset, limit) {
+                Ok(sessions) => {
+                    let text = format_sessions(&sessions, offset);
+                    emit(
+                        json_output,
+                        json!({"ok": true, "sessions": sessions, "offset": offset}),
+                        text,
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(err) => fail(json_output, err),
+            },
+            SessionCommand::Show { id, offset, limit } => {
+                match store.read_session(&id, offset, limit) {
+                    Ok(page) => {
+                        let text = format_transcript(&page);
+                        emit_command(json_output, "session show", page, text)
+                    }
+                    Err(err) => fail(json_output, err),
+                }
+            }
+        },
+        Command::Source { action } => match action {
+            SourceCommand::Add { client, path } => match store.add_source(client.into(), &path) {
+                Ok(source) => {
+                    let text = format!(
+                        "{} {} source at {}",
+                        if source.enabled {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        },
+                        source.client,
+                        source.path.display()
+                    );
+                    emit_command(json_output, "source add", source, text)
+                }
+                Err(err) => fail(json_output, err),
+            },
+            SourceCommand::List => match store.sources() {
+                Ok(sources) => {
+                    let text = format_sources(&sources);
+                    let payload = if json_output {
+                        let sources = match serde_json::to_value(&sources) {
+                            Ok(sources) => sources,
+                            Err(err) => return fail(true, err),
+                        };
+                        json!({"ok": true, "sources": sources})
+                    } else {
+                        Value::Null
+                    };
+                    emit(json_output, payload, text);
+                    ExitCode::SUCCESS
+                }
+                Err(err) => fail(json_output, err),
+            },
+        },
+        Command::Sync => match store.sync() {
+            Ok(report) => {
+                let text = format_sync(&report);
+                let has_errors = !report.errors.is_empty();
+                let payload = if json_output {
+                    let imports = match serde_json::to_value(&report.imports) {
+                        Ok(imports) => imports,
+                        Err(err) => return fail(true, err),
+                    };
+                    let errors = match serde_json::to_value(&report.errors) {
+                        Ok(errors) => errors,
+                        Err(err) => return fail(true, err),
+                    };
+                    if has_errors {
+                        let error = format!(
+                            "{} configured source(s) failed to sync",
+                            report.errors.len()
+                        );
+                        json!({
+                            "ok": false,
+                            "error": error,
+                            "imports": imports,
+                            "errors": errors,
+                        })
+                    } else {
+                        json!({"ok": true, "imports": imports, "errors": errors})
+                    }
+                } else {
+                    Value::Null
+                };
+                emit(json_output, payload, text);
+                if has_errors {
+                    ExitCode::from(2)
+                } else {
+                    ExitCode::SUCCESS
+                }
+            }
+            Err(err) if json_output => {
+                let error = err.to_string();
+                emit(
+                    true,
+                    json!({"ok": false, "error": error, "imports": [], "errors": []}),
+                    String::new(),
+                );
+                ExitCode::from(2)
+            }
+            Err(err) => fail(false, err),
+        },
+        Command::Model { action } => match action {
+            ModelCommand::Install => {
+                match noesora_engine::embedding::install_model(&store.model_dir()) {
+                    Ok(model) => {
+                        let text = format_model(&model);
+                        emit_command(json_output, "model install", model, text)
+                    }
+                    Err(err) => fail(json_output, err),
+                }
+            }
+            ModelCommand::Status => {
+                let model = noesora_engine::embedding::model_status(&store.model_dir());
+                let text = format_model(&model);
+                emit_command(json_output, "model status", model, text)
+            }
+        },
+        Command::Index => match store.index_embeddings() {
+            Ok(report) => {
+                let text = format!(
+                    "Indexed {} passages; {} remain (model fingerprint {}).",
+                    report.indexed, report.remaining, report.fingerprint
+                );
+                emit_command(json_output, "index", report, text)
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::Rebuild => match store.rebuild() {
+            Ok(status) => {
+                let text = format_store_status(&status);
+                emit_command(json_output, "rebuild", status, text)
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::ImportVault { path } => match store.import_vault(&path) {
+            Ok(imported) => {
+                emit(
+                    json_output,
+                    json!({"ok": true, "command": "import-vault", "imported": imported}),
+                    format!("Imported {imported} records from {}", path.display()),
+                );
+                ExitCode::SUCCESS
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::Search {
+            query,
+            mode,
+            project,
+            client,
+            scope,
+            limit,
+        } => {
+            let filters = SearchFilters {
+                project,
+                client: client.map(Into::into),
+                scope: scope.into(),
+                limit: usize::from(limit),
+            };
+            match store.search(&query, mode.into(), &filters) {
+                Ok(response) => {
+                    let text = format_search(&response);
+                    let truncated = response.truncated;
+                    let exit = emit_command(json_output, "search", response, text);
+                    if truncated && !json_output {
+                        let _ = writeln!(
+                            io::stderr(),
+                            "noesora: more ranked hits exist; showing the returned evidence"
+                        );
+                    }
+                    exit
+                }
+                Err(err) => fail(json_output, err),
+            }
+        }
+        Command::Note {
+            title,
+            status,
+            files,
+            project,
+            body,
+        } => {
+            let input = RecordInput {
+                title,
+                body: body.join(" "),
+                kind: "note".to_owned(),
+                status,
+                project: project.unwrap_or_else(|| "local".to_owned()),
+                files,
+            };
+            match store.write_record(&input) {
+                Ok(written) => {
+                    let text = format!("Wrote note {} at {}", written.id, written.path.display());
+                    emit_command(json_output, "note", written, text)
+                }
+                Err(err) => fail(json_output, err),
+            }
+        }
+        Command::Query { sql } => match store.query(&sql) {
+            Ok(result) => {
+                let truncated = result.truncated;
+                let text = result.csv();
+                let exit = emit_command(json_output, "query", result, text);
+                if truncated && !json_output {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "noesora: query result was capped by the engine"
+                    );
+                }
+                exit
+            }
+            Err(err) => fail(json_output, err),
+        },
+        Command::Mcp { .. } | Command::Tui => unreachable!("handled before opening the store"),
+    }
+}
+fn mcp_memory_policy(
+    managed: bool,
+    project: Option<String>,
+    all_projects: bool,
+) -> Result<MemoryPolicy, String> {
+    if !managed {
+        if project.is_some() || all_projects {
+            return Err("MCP scope flags require --managed".to_owned());
+        }
+        return Ok(MemoryPolicy::Owner);
+    }
+
+    match (project, all_projects) {
+        (Some(project), false) => MemoryPolicy::project(project),
+        (None, true) => Ok(MemoryPolicy::AllReadOnly),
+        (None, false) => Err(
+            "--managed requires exactly one of --project <exact-id> or --all-projects".to_owned(),
+        ),
+        (Some(_), true) => {
+            Err("--project and --all-projects are conflicting managed scopes".to_owned())
+        }
+    }
 }
 
-fn query(sql: &str) -> Result<index::QueryResult, IndexError> {
-    let cwd = std::env::current_dir()?;
-    let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
-    index::query(&root, sql)
+fn with_command<T: Serialize>(
+    command: &'static str,
+    payload: T,
+) -> Result<Value, serde_json::Error> {
+    let payload = serde_json::to_value(payload)?;
+    Ok(match payload {
+        Value::Object(mut object) => {
+            object.insert("ok".to_owned(), Value::Bool(true));
+            object.insert("command".to_owned(), Value::String(command.to_owned()));
+            Value::Object(object)
+        }
+        value => json!({"ok": true, "command": command, "payload": value}),
+    })
 }
 
-fn status() -> Result<(PathBuf, vault::VaultRecord), VaultError> {
-    let cwd = std::env::current_dir()?;
-    let root = vault::find_vault(&cwd).ok_or(VaultError::NotFound)?;
-    let record = vault::read_vault(&root)?;
-    Ok((root, record))
+fn emit_command<T: Serialize>(
+    json_output: bool,
+    command: &'static str,
+    payload: T,
+    text: String,
+) -> ExitCode {
+    if !json_output {
+        println!("{}", clean_terminal(&text));
+        return ExitCode::SUCCESS;
+    }
+    match with_command(command, payload) {
+        Ok(payload) => {
+            println!("{payload}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => fail(true, err),
+    }
 }
 
-fn vault_use(path: &std::path::Path) -> Result<(PathBuf, PathBuf), ConfigError> {
-    config::set_default_vault(&config::home_dir()?, path)
-}
-fn candidate_import(source: &std::path::Path) -> Result<PathBuf, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("could not determine current directory: {err}"))?;
-    let transcript = File::open(source)
-        .map_err(|err| format!("could not open transcript {}: {err}", source.display()))?;
-    candidate::write_transcript_candidate(&cwd, transcript).map_err(|err| err.to_string())
+fn format_store_status(status: &noesora_engine::StoreStatus) -> String {
+    format!(
+        "Store {}
+{} sessions · {} messages · {} records
+{} text chunks · {} embedded · {} pending embeddings",
+        clean_terminal(&status.root.display().to_string()),
+        status.sessions,
+        status.messages,
+        status.records,
+        status.chunks,
+        status.embedded_chunks,
+        status.pending_embeddings,
+    )
 }
 
-fn note(
-    title: String,
-    status: String,
-    files: Vec<String>,
-    body: Vec<String>,
-) -> Result<record::WrittenNote, RecordError> {
-    let status = RecordStatus::parse(&status).ok_or(RecordError::InvalidStatus)?;
-    let cwd = std::env::current_dir().map_err(RecordError::from)?;
-    record::write_note(&cwd, &title, &body.join(" "), status, &files)
+fn format_import(report: &noesora_engine::ImportReport) -> String {
+    format!(
+        "{} session {} · {} · {} messages · {} chunks{}
+Snapshot: {}",
+        report.client,
+        clean_terminal(&report.session_id),
+        clean_terminal(&report.project),
+        report.messages,
+        report.chunks,
+        if report.duplicate {
+            " (duplicate; already imported)"
+        } else {
+            ""
+        },
+        clean_terminal(&report.snapshot.display().to_string()),
+    )
 }
-fn emit_ok<T: Serialize>(json: bool, payload: T, text: String) {
-    if json {
-        println!("{}", serde_json::to_string(&payload).expect("json"));
+
+fn format_sessions(sessions: &[noesora_engine::SessionSummary], offset: usize) -> String {
+    if sessions.is_empty() {
+        return "No imported sessions on this page.".to_owned();
+    }
+    use std::fmt::Write as _;
+    let mut output = String::new();
+    for (index, session) in sessions.iter().enumerate() {
+        if index != 0 {
+            output.push('\n');
+        }
+        let _ = write!(
+            output,
+            "{}. {}  [{} · {}] {} · {} messages · {}",
+            offset + index + 1,
+            clean_terminal(&session.id),
+            clean_terminal(&session.project),
+            session.client,
+            clean_terminal(&session.title),
+            session.messages,
+            clean_terminal(&session.updated_at),
+        );
+    }
+    output
+}
+
+fn format_transcript(page: &noesora_engine::TranscriptPage) -> String {
+    let mut output = format!(
+        "Raw session {} · project {} · source {}
+Snapshot: {}
+Messages {}–{} of {}
+",
+        clean_terminal(&page.session.id),
+        clean_terminal(&page.session.project),
+        page.session.client,
+        clean_terminal(&page.session.snapshot),
+        page.offset.saturating_add(1),
+        page.offset.saturating_add(page.messages.len()),
+        page.total,
+    );
+    for message in &page.messages {
+        let stamp = message.timestamp.as_deref().unwrap_or("-");
+        output.push_str(&format!(
+            "
+[{} · {} · {}] {}
+{}
+",
+            clean_terminal(&message.role),
+            clean_terminal(&message.kind),
+            clean_terminal(stamp),
+            clean_terminal(&message.id),
+            clean_terminal(&message.text),
+        ));
+    }
+    output
+}
+
+fn format_sources(sources: &[noesora_engine::SourceConfig]) -> String {
+    if sources.is_empty() {
+        return "No source roots configured.".to_owned();
+    }
+    sources
+        .iter()
+        .map(|source| {
+            format!(
+                "{} [{}] {} · {}",
+                clean_terminal(&source.id),
+                source.client,
+                clean_terminal(&source.path.display().to_string()),
+                if source.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+fn format_sync(report: &noesora_engine::SyncReport) -> String {
+    let mut output = format!(
+        "Imported {} sessions from configured sources.",
+        report.imports.len()
+    );
+    for error in &report.errors {
+        output.push_str(
+            "
+Source error: ",
+        );
+        output.push_str(&clean_terminal(error));
+    }
+    output
+}
+
+fn format_model(model: &noesora_engine::ModelStatus) -> String {
+    format!(
+        "Model {} · {} · {} · {}",
+        if model.installed {
+            "installed"
+        } else {
+            "unavailable"
+        },
+        model.model_id,
+        model.revision,
+        clean_terminal(&model.path.display().to_string()),
+    )
+}
+
+fn format_search(response: &noesora_engine::SearchResponse) -> String {
+    if response.refused {
+        return format!(
+            "Refused: no evidence found ({})",
+            response.reason.as_deref().unwrap_or("no_evidence")
+        );
+    }
+    if response.hits.is_empty() {
+        return "No evidence found.".to_owned();
+    }
+    response
+        .hits
+        .iter()
+        .map(|hit| {
+            format!(
+                "{} [{}] {} · {} · {}
+ID: {}
+Type: {}
+Role: {}
+Path: {}
+Span: {}..{}
+Hash: {}
+Field: {}
+{}",
+                clean_terminal(&hit.title),
+                clean_terminal(&hit.kind),
+                clean_terminal(&hit.project),
+                clean_terminal(&hit.client),
+                clean_terminal(&hit.session_id.as_deref().unwrap_or("approved record")),
+                clean_terminal(&hit.id),
+                clean_terminal(&hit.kind),
+                clean_terminal(&hit.role),
+                clean_terminal(&hit.path),
+                hit.span[0],
+                hit.span[1],
+                clean_terminal(&hit.hash),
+                clean_terminal(hit.field.as_deref().unwrap_or("-")),
+                clean_terminal(&hit.text),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+
+---
+
+",
+        )
+}
+
+pub(crate) fn clean_terminal(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\n' | '\t' => ch,
+            ch if ch.is_control() => '�',
+            ch => ch,
+        })
+        .collect()
+}
+
+fn emit(json_output: bool, payload: Value, text: String) {
+    if json_output {
+        println!("{payload}");
     } else {
-        println!("{text}");
+        println!("{}", clean_terminal(&text));
     }
 }
 
 fn clap_error(err: clap::Error) -> ExitCode {
-    // MCP mode keeps stdout for protocol frames only, so `--json` never applies to it.
-    let mcp = std::env::args_os()
-        .skip(1)
-        .find(|arg| !arg.to_string_lossy().starts_with('-'))
-        .is_some_and(|arg| arg == "mcp");
-    let json = !mcp && std::env::args_os().any(|arg| arg == "--json");
-    if json && err.exit_code() != 0 {
+    let json_output = std::env::args_os().skip(1).any(|arg| arg == "--json");
+    if json_output && err.exit_code() != 0 {
         return fail(true, err);
     }
     let code = err.exit_code();
-    let _ = err.print();
+    let mut message = clean_terminal(&err.to_string());
+    if !message.ends_with('\n') {
+        message.push('\n');
+    }
+    if code != 0 {
+        let _ = io::stderr().write_all(message.as_bytes());
+    } else {
+        let _ = io::stdout().write_all(message.as_bytes());
+    }
     ExitCode::from(code as u8)
 }
 
-fn fail(json: bool, err: impl std::fmt::Display) -> ExitCode {
-    if json {
+fn fail(json_output: bool, err: impl std::fmt::Display) -> ExitCode {
+    if json_output {
         let payload = Fail {
             ok: false,
             error: err.to_string(),
         };
-        println!("{}", serde_json::to_string(&payload).expect("json"));
+        println!(
+            "{}",
+            serde_json::to_string(&payload).expect("JSON failure payload")
+        );
     } else {
-        let _ = writeln!(io::stderr(), "noesora: {err}");
+        let message = clean_terminal(&err.to_string());
+        let _ = writeln!(io::stderr(), "noesora: {message}");
     }
     ExitCode::from(2)
 }
