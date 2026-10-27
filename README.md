@@ -38,9 +38,28 @@ cargo run -- sync
 
 No roots are discovered from the working directory, and sync is not a background watcher. To bring in existing Markdown records, use `cargo run -- import-vault /path/to/old-vault`; it imports records without modifying the originals. This does not select that vault as the CLI store. Existing vaults and session logs are not migrated implicitly.
 
+### Neutral session sources
+
+[VERIFIED SOURCE] Use `cargo run -- session ingest /path/to/neutral.jsonl` for explicit adapter-neutral intake. The file starts with one session header, followed by message rows:
+
+```jsonl
+{"type":"session","schema":"noesora.session/v1","source_namespace":"example:harbor","external_id":"chat/7","project":"/projects/harbor","title":"Credential storage"}
+{"type":"message","external_id":"turn/1","role":"user","kind":"conversation","payload":{"text":"Keep credentials in the operating system credential store."},"parts":[{"field":"/text","scope":"conversation"}]}
+```
+
+[VERIFIED SOURCE] `parts` selects indexed strings through JSON pointers relative to `payload`; it does not redact stored payloads. Scope is `conversation`, `tools`, or `unclassified`. Unknown structural fields, duplicate message IDs/selectors, invalid pointers/times, and oversized metadata fail visibly. The caller must exclude secrets before intake. [Engine codec](https://github.com/Noesora/noesora-engine/blob/main/src/neutral.rs)
+
+[VERIFIED SOURCE] Neutral results use hashed `mem:` identities and preserve the opaque external ID. `client` is null rather than a synthetic native client; absent source times display as unknown. Intake never executes archived commands or creates native resume ownership. Native-history imports remain unchanged.
+
+```bash
+cargo run -- search "credentials" --source-namespace example:harbor --project /projects/harbor
+```
+
+[RELEASE BOUNDARY] Neutral v2 manifests require coordinated compatible readers. Unsupported old readers must fail visibly rather than return a partial corpus. Do not mix old and new writers. This source change does not update an installed CLI or publish a release.
+
 ## Search and local model
 
-Search is local retrieval with source citations, not generated answers. Text is the default mode; semantic retrieval is optional. Scope defaults to `conversation`; use `--scope tools` to search tool messages or `--scope all` to include both. All projects are searched unless `--project` narrows the search. Each hit carries its source ID, type, title, project/client/session metadata, store-relative path, byte span, whole-file SHA-256, and quoted source text. The default limit is 10; `--limit` accepts 1 to 100. JSON reports `truncated`; a no-evidence result is an explicit refusal rather than an answer.
+[VERIFIED SOURCE] Search is local retrieval with source citations, not generated answers. Text is default; semantic retrieval is optional. Scope defaults to `conversation`. `tools` selects tool content; `all` also includes unclassified neutral parts. All projects are searched unless `--project` narrows them. `--source-namespace` is independent of `--client`. Hits include source identity, store-relative path, byte span, whole-file SHA-256, and quoted text. Session hits also include message identity, JSON pointer, and decoded-text span. Filters precede the cap and coverage. JSON reports `truncated`; no evidence is a refusal, not an answer.
 
 ```bash
 cargo run -- search "connection refused" --mode text --scope tools
@@ -81,14 +100,24 @@ MCP search Engine failures set `isError: true` and preserve `ok: false`, `code`,
 
 Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to run it, and `m` to switch between text and semantic search. In non-input views, `q` quits; in the search input, `q` is query text. Ctrl-C quits. Esc backs out of a detail/search view, and Esc from the session list quits.
 
-The TUI loads session pages, store/index readiness, and model status in background workers. Loading, incomplete indexing, unavailable model, and operation errors are displayed in the interface. Browsing and search do not import or sync history, edit sessions or approved records, or change source configuration; derived index state remains Engine-owned. The terminal restoration guard runs on normal exit and errors. This R1 UI is a read-only memory browser, not a native-agent workspace. The R02 UI is approved but not implemented; native-provider and native-session compatibility are not verified. Fresh macOS PTY proof passed paging, transcript visibility, races, and restoration. It observed `q` as query text in search input and as a quit from session-list focus; other non-input focus paths were not tested. Page/transcript worker completion and partial-initialization entry/terminal-attribute transition while the child was alive were unobserved.
+[VERIFIED SOURCE] The standalone TUI host owns terminal initialization and restoration. The memory component draws into a supplied `Frame`/`Rect`; workers retain generation, session, and page-offset guards. Browsing stays global, including when launch project/client/namespace flags narrow search. Memory views perform no native discovery, agent launch, login, Attach action, or integration/configuration write. Native workspace work remains paused outside UM1-I2.
+
+[VERIFIED LOCAL] The actual 72/120-column PTY flow passed global browsing, wrapped and expanded transcripts, and the archived-command canary. It selected a real search hit and checked current evidence frames against source-verified CLI/MCP IDs, path/hash, event byte span, JSON pointer, decoded-text span, and quote. The flow also checked terminal restoration before harness reset. This is synthetic local proof, not installed-harness compatibility or remote CI. [Smoke](scripts/tui-smoke.py)
 
 ## Local development
 
-`Cargo.toml` uses the private sibling `../noesora-engine`; `.github/engine-revision` pins `fc63febea88a2d27302e77a11b4647230fae5f3b`. Public CI checks source formatting and smoke-driver syntax, not CLI behavior. The private Trusted CLI workflow verifies the exact CLI SHA and declared Engine pin before merge.
+[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `301906a308722ef773e1709c9d40f18bb92afb64`. Public CI checks formatting and script syntax only. The private gate binds exact CLI and Engine commits on Linux/macOS; local verification is not a substitute for that gate.
 
 [VERIFIED baseline] Published R1 CLI commit `75fc796958e11419b976499649f9b35f06b56f59` passed its Linux/macOS paired checks against the earlier Engine pin. That result does not attest to this typed-error change; its focused verification is recorded separately in the PR. History import support does not establish native-agent control compatibility.
 
 [VERIFIED local] The CLI typed-error slice passed `cargo check --offline --locked --all-targets` and `cargo test --offline --locked`: 46 tests passed. Removing the typed search handler made its one collected category/recovery test fail; restoring it returned the full suite to green. An actual binary smoke under OS network denial observed both error codes, a healthy refusal, and text-search recovery. These checks do not attest to installed native-agent compatibility or exact-head paired CI for this new commit.
+
+### UM1-I2 local verification
+
+[VERIFIED LOCAL] `cargo test --offline --locked` passed 51 tests: 24 unit, 17 CLI, and 10 MCP. Formatter and offline locked all-target checks exited `0`. The paired Engine passed 79 tests. One obsolete fixed-scroll test was removed; incremental physical-row tests and the actual narrow/wide PTY flow cover tail reachability.
+
+[VERIFIED LOCAL] The full cached-model smoke ran under OS network denial and printed `Neutral semantic projection and namespace-scoped citation passed`. The same run passed native late-window evidence, source integrity, and the actual current-frame TUI/CLI/MCP checks. Real renderer variants with a different selected hit, a hash corrupted only after scrolling, or a one-byte event-span error each failed the pane verifier. Restoring the exact renderer returned the full PTY flow to success.
+
+[LIMITS] These local synthetic-fixture results preceded publication. They do not attest remote CI, a merge, an installed upgrade, or deployment. No model download or private-store change occurred. The declared Engine pin must match the exact private paired run.
 
 Apache-2.0. See [LICENSE](LICENSE).

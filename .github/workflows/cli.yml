@@ -23,5 +23,7 @@ jobs:
         run: rustfmt --edition 2021 --check src/main.rs tests/cli.rs tests/mcp.rs
       - name: Check smoke-driver syntax
         run: node --check scripts/smoke.mjs
+      - name: Parse TUI smoke Python syntax
+        run: python3 -c "import ast; from pathlib import Path; ast.parse(Path('scripts/tui-smoke.py').read_text(encoding='utf-8'))"
       - name: Explain private integration gate
-        run: echo "Full behavior and local-model checks run in the private Engine Trusted CLI workflow against this exact CLI SHA and .github/engine-revision. Public format checks are not that gate."
+        run: echo "Public formatting and syntax checks do not build or execute the CLI. Behavior, actual selected-hit TUI evidence, and local-model checks require the private Trusted CLI workflow at this exact CLI SHA and its full Engine pin."

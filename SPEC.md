@@ -1,33 +1,34 @@
 # SPEC
 
 ## §G GOAL
-Local memory + branded prompt workspace over installed coding-agent CLIs. Shared archive/E5, explicit outbound scope, interactive native requests. No new provider SDK or credential store.
+Memory-only CLI/MCP/TUI over one shared Rust Engine. Neutral/native canonical archives, cited text/semantic retrieval and explicit local intake. Native execution remains paused outside UM1-I2.
 
 ## §C CONSTRAINTS
 - [USER APPROVED R1] Engine owns one global archive/store and local embedding inference; CLI owns structured commands, JSON, MCP stdio and TUI.
 - Global `NOESORA_HOME` / `~/.noesora` resolution only; retire nearest-vault and MCP-only vault configuration paths. No compatibility shim selecting old vaults.
 - Explicit session import or explicitly enabled-source sync only. Preserve original files; no automatic historical intake or source modification.
 - Conversation search default; Tools/All scope explicit; all projects default. Raw sessions distinct from approved notes/handoffs.
-- [USER APPROVED R5] TUI prompt/feed uses existing native agents. Ordinary memory browsing stays read-only; confirmed run capture and integration setup are explicit exceptions.
-- Local memory/E5 needs no remote inference or runtime downloads. Native agents reuse their existing executable/provider/model/auth and may send prompts/evidence remotely after explicit run consent. No Noesora provider SDK/login.
-- No Noesora shell interpreter, command replay, graph or Cloud work. Native agents own their tools/policy. No bypass/force/analytics opt-in/system-prompt clearing or silent strict-MCP isolation.
+- [USER APPROVED UM1-I2, 2026-10-27] Supersede active R5 native workspace scope with memory-only clients and thin capture/import/access adapters. Existing native tasks remain historical paused work, not completed or discarded.
+- Local memory/E5 needs no remote inference or runtime download. Model setup remains explicit. No Cloud, provider SDK/router/login or new credential store.
+- Memory TUI performs no native discovery/version process, agent launch, Attach action, native execution or integration/configuration write. No bottom composer or new focus framework.
 
 ## §I INTERFACES
 - env: `NOESORA_HOME` → application home; default `~/.noesora`.
 - cmd: `noesora init` / `status` → global store initialize/status.
 - cmd: `noesora session import --client omp|claude-code|codex <path>` → explicit archive + normalized projection; `session list` / `show` → paged session history.
+- cmd: `noesora session ingest <path>` → explicit strict neutral JSONL intake through `Store::ingest_session`; no new MCP arbitrary-file ingestion tool.
 - cmd: `noesora source add --client <client> <path>` / `source list` / `sync` → only explicitly enabled source roots.
 - cmd: `noesora model install` / `model status` / `index` → explicit assets setup and pending-vector processing.
-- cmd: `noesora search <query> --mode text|semantic [--project <project>] [--client <client>] [--scope conversation|tools|all] [--limit 1..100]` → same evidence as TUI/MCP.
+- cmd: `noesora search <query> --mode text|semantic [--project <project>] [--client <client>] [--source-namespace <namespace>] [--scope conversation|tools|all] [--limit 1..100]` → same source-verified evidence as TUI/MCP.
 - cmd: `noesora note --title <title> [--status open|done|blocked] [--file <path>]... [body]` → global approved Markdown record; project metadata optional.
 - cmd: `noesora query <sql>` → read-only capped CSV; `rebuild` → derived data recovery.
 - cmd: `noesora import-vault <path>` → explicit existing-record migration without modifying originals.
-- cmd: `noesora tui` → Noetic Gate branded prompt/feed workspace; plain input starts/continues selected native turn after preflight; `/memory`, `/agent`, `/integrations` are local views. Native requests use offered choices.
+- cmd: `noesora tui [--project <project>] [--client <client>] [--source-namespace <namespace>]` → standalone memory host. Session browsing stays global; launch filters affect search only. Host owns terminal RAII; component draws into supplied Frame/Rect.
 - cmd: `noesora --json ...` → parseable success/error object; error exit nonzero.
 - mcp: existing owner mode preserved; `mcp --managed --project <exact-id>` or `--managed --all-projects` supplies read-only search/session tools. Managed scopes disable SQL/mutation and enforce direct session-ID reads. No silent all-project default for managed connections.
 
 ## §V INVARIANTS
-V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures additionally preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
+V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
 V2: ∀ search hit → engine-backed `id,type,title,path,span,hash,text`; no evidence → explicit refusal. ⊥ generated answer.
 V3: Writes use Engine global store; imported sessions remain raw sessions. No automatic source intake or promotion.
 V4: `query` read-only & row-capped by engine; text result CSV.
@@ -45,7 +46,7 @@ V15: Explicit session import preserves source bytes and identity; unsupported/in
 V16: TUI Search/Input appends printable text, including q. Focus-aware quit semantics follow V22; Esc steps back.
 
 V17: Memory search/read epochs are separate from run/turn/request identities. Search cancellation cannot invalidate native output or pending decisions; expensive work stays off UI loop.
-V18: Missing model, incomplete index, failed indexing and genuine no-match states are distinguishable in TUI/JSON/MCP.
+V18: Missing model, incomplete index, failed indexing and no-match states are distinguishable in TUI/JSON/MCP.
 V19: Source text cannot execute terminal controls or archived commands; rendering sanitizes control characters without changing archive.
 V20: Semantic inference and session retrieval work with network disabled after explicit model setup.
 V21: Session list/reader page large history, show project/client/source identity and distinguish raw history from approved knowledge.
@@ -68,6 +69,13 @@ V36: A pending transcript result can be applied only while its requested session
 V37: Displayed session offsets describe the applied page; cancelled or failed requests cannot relabel retained rows with an uncommitted offset.
 V38: Wrapped transcript text and expanded tool content remain fully reachable by scrolling at supported pane widths without changing source data or message identity.
 V39: Public source checks cover every CLI pull request head regardless of base branch without private Engine checkout; the exact-head private paired gate remains required before merge.
+V40: Explicit neutral ingest accepts arbitrary namespaces without pretending to be native clients. CLI/MCP/TUI share one Store, not per-product databases.
+V41: All memory clients migrate together to namespace/external ID and optional native Client/source dates; absent times display explicitly unknown, never fabricated.
+V42: Namespace search filtering is independent of native-client filtering and cannot widen managed exact-project authority. No new MCP file-ingestion tool or managed mutation.
+V43: Standalone memory host retains typed-error recovery, physical-row/EOF scrolling, worker generations, readiness, paging and pre-initialization terminal RAII. No global history/focus framework or bottom composer.
+V44: Memory browsing/query executes no native discovery, login, agent or archived command and changes no integration, canonical source or configuration.
+V45: Neutral v2 manifests require coordinated compatible clients. Unsupported old readers fail visibly, never silently return a partial corpus. No mixed-writer support.
+V46: Shared Engine/CLI/MCP/TUI preserve session/message identity, path/hash, pointer, event byte span, decoded-text span, quoted text, refusal/coverage and typed search errors. Actual PTY search selects a real hit and compares the rendered evidence pane with the source-verified Engine/CLI/MCP hit. Wrong selected identity/hash/span must fail that proof even if CLI search/transcript checks pass. Upstream locator metadata is not verified live evidence.
 
 ## §T TASKS
 id|status|task|cites
@@ -92,6 +100,10 @@ T16|.|widen verified native paths to Grok/OpenCode/Cursor ACP and Codex/Claude c
 T17|.|reviewed native setup/receipt/undo and verified instruction/hook templates for installed clients|V25,V26,V28,I.cmd
 T18|.|preserve memory overlays, paging, controls and cancel-safe process lifecycle|V10,V12,V17,V19,V21,V22,V23,I.cmd
 T19|.|union behavior/protocol/scope/conflict gates and actual native/PTY proof after separate consent|V24,V25,V26,V27,V28,V29,V30,V31,I.cmd
+T20|x|neutral ingest CLI, namespace search and optional source metadata cutover|V1,V15,V40,V41,V42,V46,I.cmd
+T21|x|shared MCP DTO/filter/error migration without changing managed authority|V5,V25,V41,V42,V46,I.mcp
+T22|x|memory-only terminal host/component with preserved sanitization, scrolling and cancellation|V12,V19,V23,V32,V36,V37,V38,V43,V44,I.cmd
+T23|~|coordinated compatibility, cross-client evidence parity, selected-hit PTY negative controls and exact-pin paired gate; exact-head remote CI remains pending|V14,V18,V20,V40,V45,V46,I.cmd,I.mcp
 
 ## §B BUGS
 id|date|cause|fix
@@ -134,3 +146,8 @@ B35|2026-10-23|[VERIFIED] the external PTY runner used select.select without imp
 B36|2026-10-23|[VERIFIED] the PTY readiness predicate expected insertion/title order although Engine sorts equal-timestamp sessions by source-qualified ID (bg_39)|derive or control fixture ordering while preserving exact selected-row checks
 B37|2026-10-23|[VERIFIED] a long global store path wrapped over the fixed three-row header and hid model/index readiness in the actual 120-column TUI (bg_39)|V18; bound metadata rows so readiness and query remain visible
 B38|2026-10-23|[VERIFIED] real tool transcript with an unbroken 4096-character word failed with "scroll target not reached after 128 keypresses" (artifact://2235); debugger sampled the repeated suffix scan in source_grapheme_at|V38; use the pinned lazy first-grapheme iterator; actual 72/120-column diagnostic passed (artifact://2238)
+B39|2026-10-27|[VERIFIED] UM1-I2 all-target check failed `E0505` at `src/memory_ui.rs:3002`: renderer regression kept borrowed IDs after moving the response into App|V46; retain only owned expected session/message IDs before moving the response; no full-result clone or new product invariant
+B40|2026-10-27|[VERIFIED] palette restoration exposed `E0425` for test helper return type `Color` at `src/memory_ui.rs:3225`; the runtime no longer needs a global Color import|V43; import the existing color type only inside the test module; no new product invariant
+B41|2026-10-27|[VERIFIED] selected-evidence regression collected one and failed at 72 columns although its source path was fully visible over two rows: the matcher joined vertical frame borders into the path|V46; exclude only the frame separator while retaining the exact expected source values; actual PTY proof validates the current pane separately
+B42|2026-10-27|[VERIFIED] real PTY run timed out on the global page although loaded rows were rendered; cleanup then masked that error with `termios.error: (25, Inappropriate ioctl for device)`|V12,V43,V46; semantic waits inspect the current VT frame, and terminal snapshots/reset use the owned master as in the reviewed harness; raw recording remains only for control-sequence checks
+B43|2026-10-27|[VERIFIED] complete client suite reported `23 passed; 2 failed`: a fixed twenty-row scroll did not reach a long Unicode tail, and a real bootstrap worker exceeded a five-second test deadline|V23,V38,V43; remove the incidental fixed-scroll test in favor of existing incremental-row and actual PTY coverage; make cancellation/current-result application deterministic without a disk-speed deadline

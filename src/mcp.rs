@@ -81,6 +81,9 @@ struct SearchArgs {
     /// Optional source client: omp, claude-code, codex, grok, opencode, or cursor-agent.
     #[serde(default)]
     client: Option<String>,
+    /// Optional source namespace, independent of the native client filter.
+    #[serde(default)]
+    source_namespace: Option<String>,
     /// conversation (default), tools, or all.
     #[serde(default = "default_search_scope")]
     scope: String,
@@ -195,7 +198,7 @@ impl Noesora {
     }
 
     #[tool(
-        description = "Search the archive within the connection's authorized project scope for cited evidence. Returns engine SearchHit fields (id, type, title, project, client, session_id, role, path, span, hash, text), refusal reason, index coverage and truncation state."
+        description = "Search the archive within the connection's authorized project scope for cited evidence. Returns engine SearchHit fields (id, type, title, project, nullable client, session_id, message_id, source_namespace, external_id, role, path, span, hash, field, text_span, text), refusal reason, index coverage and truncation state."
     )]
     async fn search(&self, Parameters(args): Parameters<SearchArgs>) -> CallToolResult {
         let policy = self.policy.clone();
@@ -208,6 +211,7 @@ impl Noesora {
                 let filters = SearchFilters {
                     project,
                     client,
+                    source_namespace: args.source_namespace,
                     scope,
                     limit: args.limit.unwrap_or(10),
                 };
