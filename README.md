@@ -106,7 +106,7 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 
 ## Local development
 
-[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `301906a308722ef773e1709c9d40f18bb92afb64`. Public CI checks formatting and script syntax only. The private gate binds exact CLI and Engine commits on Linux/macOS; local verification is not a substitute for that gate.
+[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `2eee8b4e5eb05716342f6728ca3a1390766c8be9`, including its bounded compatibility-build CI fix. Public CI checks formatting and script syntax only. The private gate binds exact CLI and Engine commits on Linux/macOS; local verification is not a substitute for that gate.
 
 [VERIFIED baseline] Published R1 CLI commit `75fc796958e11419b976499649f9b35f06b56f59` passed its Linux/macOS paired checks against the earlier Engine pin. That result does not attest to this typed-error change; its focused verification is recorded separately in the PR. History import support does not establish native-agent control compatibility.
 
