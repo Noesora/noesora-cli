@@ -833,6 +833,23 @@ class TerminalSession:
             self.recording.extend(data)
             self.screen.feed(data)
 
+    def settle(self, description, quiet=0.12, timeout=1.5):
+        deadline = time.monotonic() + timeout
+        previous = tuple(self.screen.visible_lines())
+        stable_since = time.monotonic()
+        while time.monotonic() < deadline:
+            self.drain(0.05)
+            current = tuple(self.screen.visible_lines())
+            now = time.monotonic()
+            if current != previous:
+                previous = current
+                stable_since = now
+            if self._poll_exit() is not None:
+                raise ProofError("TUI exited while " + description)
+            if now - stable_since >= quiet:
+                return
+        raise ProofError("TUI frame did not settle while " + description)
+
     def wait_for(self, marker, description, timeout=PTY_TIMEOUT):
         if isinstance(marker, bytes):
             marker = marker.decode("utf-8")
@@ -1100,6 +1117,36 @@ def run_width(binary, workspace, home, empty_path, env, rows, columns, session_o
             session.drain(0.08)
         else:
             raise ProofError("expanded tool output tail did not become visible")
+        expected_final_transcript_row = "C1 controls:"
+        session.settle("settling the visible tool tail before finding physical EOF")
+        eof_frame = None
+        for _ in range(256):
+            previous_frame = tuple(session.screen.visible_lines())
+            session.send(b"\x1b[B", "reaching a stable physical transcript EOF")
+            session.settle("settling the final physical transcript row")
+            current_frame = tuple(session.screen.visible_lines())
+            if current_frame == previous_frame:
+                if compact(expected_final_transcript_row) not in compact("\n".join(current_frame)):
+                    raise ProofError("transcript reached a stable frame without the fixture's final row")
+                eof_frame = current_frame
+                break
+        if eof_frame is None:
+            raise ProofError("transcript did not reach a stable physical EOF within bounded scrolling")
+        session.send(b"\x1b[B", "checking an extra Down at transcript EOF")
+        session.settle("settling the extra Down at transcript EOF")
+        if tuple(session.screen.visible_lines()) != eof_frame:
+            raise ProofError("an extra Down changed the stable transcript EOF frame")
+        session.send(b"\x1b[A", "checking one Up reverses the EOF scroll")
+        session.settle("settling one Up from transcript EOF")
+        after_eof_up = tuple(session.screen.visible_lines())
+        if after_eof_up == eof_frame:
+            raise ProofError("one Up did not reverse the final transcript scroll")
+        if compact(expected_final_transcript_row) not in compact("\n".join(after_eof_up)):
+            raise ProofError("one Up hid the final transcript row")
+        session.send(b"\x1b[B", "restoring the transcript EOF after one Up")
+        session.settle("settling the restored transcript EOF")
+        if tuple(session.screen.visible_lines()) != eof_frame:
+            raise ProofError("one Down did not restore the previously observed EOF frame")
         for forbidden in (
             b"\x1b]52;c;" + OSC_MARKER.encode("ascii"),
             b"\x1b" + ESC_MARKER.encode("ascii"),

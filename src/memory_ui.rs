@@ -927,13 +927,26 @@ impl App {
             };
             let width = self.transcript_viewport.borrow().width;
             if let (Some(page), Some(width)) = (self.transcript.as_ref(), width) {
-                self.transcript_viewport.borrow_mut().position_at(
-                    page,
-                    &self.expanded_tools,
-                    self.selected_message,
-                    width,
-                    self.transcript_scroll,
-                );
+                let mut viewport = self.transcript_viewport.borrow_mut();
+                if viewport
+                    .position_at(
+                        page,
+                        &self.expanded_tools,
+                        self.selected_message,
+                        width,
+                        self.transcript_scroll,
+                    )
+                    .is_none()
+                {
+                    self.transcript_scroll = viewport.row.saturating_sub(1);
+                    viewport.position_at(
+                        page,
+                        &self.expanded_tools,
+                        self.selected_message,
+                        width,
+                        self.transcript_scroll,
+                    );
+                }
             }
         } else {
             let amount = delta.unsigned_abs();
@@ -3129,6 +3142,140 @@ mod tests {
             );
         }
     }
+    // V43: Scrolling beyond the final physical transcript row retains the final row; one Up reverses immediately.
+    #[test]
+    fn v43_reader_end_boundary_keeps_tail_and_reverses_without_scroll_debt() {
+        const SCROLL_PAST_END: usize = 128;
+        let source_text = format!(
+            "{}\nPREVIOUS_TAIL_ROW\nFINAL_TAIL_ROW",
+            "UNBROKEN".repeat(750)
+        );
+
+        for (width, height) in [(72, 26), (120, 38)] {
+            for (tool, message_id, role, kind) in [
+                (false, "message-1", "user", "message"),
+                (true, "tool-1", "tool", "tool_result"),
+            ] {
+                let home = TestHome::new();
+                let page = test_page(
+                    0,
+                    1,
+                    vec![test_message(message_id, role, kind, &source_text)],
+                );
+                let mut app = test_app(home.store(), page);
+                app.navigation.focus = Focus::Detail;
+                if tool {
+                    assert!(matches!(
+                        app.handle_key(KeyCode::Char('x')),
+                        MemoryAction::None
+                    ));
+                    assert!(app.expanded_tools.contains(message_id));
+                }
+
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                        .unwrap();
+                let render_rows =
+                    |terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>, app: &App| {
+                        terminal
+                            .draw(|frame| draw(frame, frame.area(), app))
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        (0..height)
+                            .map(|y| {
+                                (0..width)
+                                    .map(|x| buffer[(x, y)].symbol())
+                                    .collect::<String>()
+                            })
+                            .collect::<Vec<_>>()
+                    };
+
+                let _ = render_rows(&mut terminal, &app);
+                for _ in 0..SCROLL_PAST_END {
+                    assert!(matches!(app.handle_key(KeyCode::Down), MemoryAction::None));
+                }
+
+                let tail_offset = app.transcript_scroll;
+                let at_tail = render_rows(&mut terminal, &app);
+                let Some(final_row_at_tail) = at_tail
+                    .iter()
+                    .position(|row| row.contains("FINAL_TAIL_ROW"))
+                else {
+                    panic!(
+                        "Down blanked the final transcript row at {width}x{height} \
+                         (tool={tool}, scroll={}):\n{}",
+                        app.transcript_scroll,
+                        at_tail.join("\n")
+                    );
+                };
+
+                assert!(matches!(app.handle_key(KeyCode::Down), MemoryAction::None));
+                assert_eq!(
+                    app.transcript_scroll, tail_offset,
+                    "Down changed the applied EOF offset at {width}x{height} (tool={tool})"
+                );
+                let after_extra_down = render_rows(&mut terminal, &app);
+                assert_eq!(
+                    after_extra_down, at_tail,
+                    "Down changed the rendered EOF row at {width}x{height} (tool={tool})"
+                );
+
+                assert!(tail_offset > 0, "fixture did not scroll to its tail");
+                assert!(matches!(app.handle_key(KeyCode::Up), MemoryAction::None));
+                assert_eq!(
+                    app.transcript_scroll,
+                    tail_offset - 1,
+                    "one Up did not immediately reverse one physical row at {width}x{height} (tool={tool})"
+                );
+                let after_up = render_rows(&mut terminal, &app);
+                let Some(previous_row_after_up) = after_up
+                    .iter()
+                    .position(|row| row.contains("PREVIOUS_TAIL_ROW"))
+                else {
+                    panic!(
+                        "one Up did not reveal the previous physical row at {width}x{height} \
+                         (tool={tool}):\n{}",
+                        after_up.join("\n")
+                    );
+                };
+                let Some(final_row_after_up) = after_up
+                    .iter()
+                    .position(|row| row.contains("FINAL_TAIL_ROW"))
+                else {
+                    panic!(
+                        "one Up hid the final transcript row at {width}x{height} \
+                         (tool={tool}):\n{}",
+                        after_up.join("\n")
+                    );
+                };
+                assert_eq!(
+                    previous_row_after_up, final_row_at_tail,
+                    "one Up did not place the previous physical row at the former tail row at {width}x{height} (tool={tool})"
+                );
+                assert_eq!(
+                    final_row_after_up,
+                    previous_row_after_up + 1,
+                    "final transcript row did not follow the previous row at {width}x{height} (tool={tool})"
+                );
+
+                let page = app.transcript.as_ref().expect("loaded transcript retained");
+                assert_eq!(page.session.id, "session-1");
+                assert_eq!(page.session.source_namespace, "legacy:codex");
+                assert_eq!(page.session.external_id, "external-session-1");
+                assert_eq!(page.session.client, Some(noesora_engine::Client::Codex));
+                assert_eq!(page.session.project, "project");
+                assert_eq!(page.session.snapshot, "snapshot-1");
+                assert_eq!(page.offset, 0);
+                assert_eq!(page.total, 1);
+                assert_eq!(page.messages.len(), 1);
+                assert_eq!(page.messages[0].id, message_id);
+                assert_eq!(page.messages[0].role, role);
+                assert_eq!(page.messages[0].kind, kind);
+                assert_eq!(page.messages[0].text, source_text);
+            }
+        }
+    }
+
     #[test]
     fn transcript_tails_past_u16_scroll_limit_at_narrow_and_wide_widths() {
         const ROWS: usize = 65_700;
