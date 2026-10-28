@@ -972,6 +972,7 @@ def verify_selected_pane(session, proof, start, columns):
     terminators = tuple(expected) + ("Type:", "Index coverage:")
     seen = set()
     required = set(expected) | {"quote"}
+    previous_mismatch = None
     changed_by_scroll = False
     session.wait_for_output_since(start, "waiting for selected evidence focus")
     for _ in range(64):
@@ -987,6 +988,7 @@ def verify_selected_pane(session, proof, start, columns):
         displayed = compact("\n".join(lines))
         if compact(proof["text"]) in displayed:
             seen.add("quote")
+        mismatch = None
         for row, line in enumerate(lines):
             line = line.lstrip()
             label = next((label for label in expected if line.startswith(label)), None)
@@ -1004,18 +1006,24 @@ def verify_selected_pane(session, proof, start, columns):
             wanted = compact(expected[label])
             if complete:
                 if actual != wanted:
-                    raise ProofError(
-                        "current selected pane mismatch for " + label
-                        + "\nexpected: " + wanted + "\nactual: " + actual
-                        + "\nframe:\n" + session.screen.text()
-                    )
+                    mismatch = (label, actual, wanted)
+                    break
                 seen.add(label)
             elif not wanted.startswith(actual):
+                mismatch = (label, actual, wanted)
+                break
+        if mismatch is not None:
+            if mismatch == previous_mismatch:
+                label, actual, wanted = mismatch
                 raise ProofError(
-                    "current selected pane has a wrong partial value for " + label
-                    + "\nexpected prefix of: " + wanted + "\nactual: " + actual
+                    "stable current selected pane mismatch for " + label
+                    + "\nexpected: " + wanted + "\nactual: " + actual
+                    + "\nframe:\n" + session.screen.text()
                 )
-        if required <= seen and changed_by_scroll:
+            previous_mismatch = mismatch
+        else:
+            previous_mismatch = None
+        if mismatch is None and required <= seen and changed_by_scroll:
             return
         before = tuple(lines)
         session.send(b"\x1b[B", "scrolling the selected TUI evidence pane")

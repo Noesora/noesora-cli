@@ -106,7 +106,7 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 
 ## Local development
 
-[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `2eee8b4e5eb05716342f6728ca3a1390766c8be9`, including its bounded compatibility-build CI fix. Public CI checks formatting and script syntax only. The private gate binds exact CLI and Engine commits on Linux/macOS; local verification is not a substitute for that gate.
+[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `2eee8b4e5eb05716342f6728ca3a1390766c8be9`. Public CI checks formatting, script syntax, and the current-frame evidence-checker transition. It does not build or run the CLI. The private gate binds exact CLI and Engine commits on Linux/macOS.
 
 [VERIFIED baseline] Published R1 CLI commit `75fc796958e11419b976499649f9b35f06b56f59` passed its Linux/macOS paired checks against the earlier Engine pin. That result does not attest to this typed-error change; its focused verification is recorded separately in the PR. History import support does not establish native-agent control compatibility.
 
@@ -117,6 +117,9 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 [VERIFIED LOCAL] `cargo test --offline --locked` passed 51 tests: 24 unit, 17 CLI, and 10 MCP. Formatter and offline locked all-target checks exited `0`. The paired Engine passed 79 tests. One obsolete fixed-scroll test was removed; incremental physical-row tests and the actual narrow/wide PTY flow cover tail reachability.
 
 [VERIFIED LOCAL] The full cached-model smoke ran under OS network denial and printed `Neutral semantic projection and namespace-scoped citation passed`. The same run passed native late-window evidence, source integrity, and the actual current-frame TUI/CLI/MCP checks. Real renderer variants with a different selected hit, a hash corrupted only after scrolling, or a one-byte event-span error each failed the pane verifier. Restoring the exact renderer returned the full PTY flow to success.
+[CORRECTION TO CI STATUS] The first paired run `40544122341` passed Linux and failed on macOS after its tests and neutral semantic search passed. macOS reported `expected: sha256:90c2f19a9fd47baa591ada6c28c2c25526c4aa2e5a4e47da4123bec9bfc36fba` and `actual: sha256:90c2f19a9fd47bsha256:90c2f19a9fd47baa591ada6c28c2c25526c4aa2e5a4e47da4123bec9bfc36fba`. This was one discrepant rendered frame. The verifier now retries that field after a redraw and still rejects a repeated wrong value. The regression passes a one-frame truncated hash and fails a stable wrong hash. The same physical PTY flow passed afterward.
+
+[VERIFIED LOCAL] Against the pre-fix CLI commit `31819979cab3c38e78bb2666b937cd9b12cfe9df`, the new frame-transition test failed on the transient hash frame. With the fix, `python3 -m unittest discover -s tests -p 'test_tui_smoke.py' -v` reported `Ran 2 tests ... OK`; the tests cover transient recovery and stable bad-hash refusal. Public source CI runs this command.
 
 [LIMITS] These local synthetic-fixture results preceded publication. They do not attest remote CI, a merge, an installed upgrade, or deployment. No model download or private-store change occurred. The declared Engine pin must match the exact private paired run.
 

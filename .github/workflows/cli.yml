@@ -23,7 +23,7 @@ jobs:
         run: rustfmt --edition 2021 --check src/main.rs tests/cli.rs tests/mcp.rs
       - name: Check smoke-driver syntax
         run: node --check scripts/smoke.mjs
-      - name: Parse TUI smoke Python syntax
-        run: python3 -c "import ast; from pathlib import Path; ast.parse(Path('scripts/tui-smoke.py').read_text(encoding='utf-8'))"
-      - name: Explain private integration gate
-        run: echo "Public formatting and syntax checks do not build or execute the CLI. Behavior, actual selected-hit TUI evidence, and local-model checks require the private Trusted CLI workflow at this exact CLI SHA and its full Engine pin."
+      - name: Test current-frame TUI evidence transitions
+        run: python3 -m unittest discover -s tests -p 'test_tui_smoke.py' -v
+      - name: State public behavior boundary
+        run: echo "This public gate tests the evidence-pane transition checker, but does not build or run the CLI. Full native behavior and cached-model checks require the private Trusted CLI workflow at this exact CLI SHA and its full Engine pin."
