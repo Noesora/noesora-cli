@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -451,7 +451,7 @@ pub struct App {
     search_applied_query: Option<String>,
     search_error: Option<SearchFailure>,
     selected_hit: usize,
-    evidence_scroll: usize,
+    evidence_scroll: Cell<usize>,
     session_error: Option<String>,
     store_status: Option<StoreStatus>,
     readiness: Readiness,
@@ -487,7 +487,7 @@ impl App {
             search_applied_query: None,
             search_error: None,
             selected_hit: 0,
-            evidence_scroll: 0,
+            evidence_scroll: Cell::new(0),
             session_error: None,
             store_status: None,
             readiness: Readiness::Loading,
@@ -565,7 +565,7 @@ impl App {
         self.search_applied_query = None;
         self.search_error = None;
         self.selected_hit = 0;
-        self.evidence_scroll = 0;
+        self.evidence_scroll.set(0);
         let query = self.navigation.query.clone();
         let mode = self.search_mode;
         let filters = self.filters.clone();
@@ -687,7 +687,7 @@ impl App {
                 } => {
                     self.search_error = None;
                     self.selected_hit = 0;
-                    self.evidence_scroll = 0;
+                    self.evidence_scroll.set(0);
                     self.search_applied_query = Some(query);
                     self.search_results = Some(response);
                 }
@@ -781,7 +781,7 @@ impl App {
                 self.search_results = None;
                 self.search_applied_query = None;
                 self.search_error = None;
-                self.evidence_scroll = 0;
+                self.evidence_scroll.set(0);
             }
             Action::QueryChanged => {
                 self.invalidate();
@@ -887,7 +887,7 @@ impl App {
                 self.selected_hit = (self.selected_hit as isize + delta)
                     .clamp(0, response.hits.len() as isize - 1)
                     as usize;
-                self.evidence_scroll = 0;
+                self.evidence_scroll.set(0);
             }
         }
     }
@@ -950,11 +950,12 @@ impl App {
             }
         } else {
             let amount = delta.unsigned_abs();
-            self.evidence_scroll = if delta < 0 {
-                self.evidence_scroll.saturating_sub(amount)
+            let scroll = self.evidence_scroll.get();
+            self.evidence_scroll.set(if delta < 0 {
+                scroll.saturating_sub(amount)
             } else {
-                self.evidence_scroll.saturating_add(amount)
-            };
+                scroll.saturating_add(amount)
+            });
         }
     }
 
@@ -2187,16 +2188,46 @@ fn draw_search_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
+// Reuse the transcript physical-row wrapper to bound diagnostic scrolling at the tail.
+fn search_error_wrapped_rows(text: &str, width: u16) -> usize {
+    if width == 0 {
+        return 0;
+    }
+
+    text.split('\n').fold(0usize, |total, text_line| {
+        let mut source = TranscriptLineSource::new(Style::default());
+        source.push(Span::raw(text_line));
+        let mut cursor = WrapCursor::new(LineOffset::default());
+        let mut rows = 0usize;
+        while let Some(row) = wrapped_row(&source, cursor, width) {
+            rows = rows.saturating_add(1);
+            let Some(next) = row.next else {
+                break;
+            };
+            cursor = next;
+        }
+        total.saturating_add(rows)
+    })
+}
+
 fn draw_search_evidence(frame: &mut Frame, app: &App, area: Rect) {
     let title = "Source evidence".to_owned();
     let block = focused_block(&title, app.navigation.focus == Focus::Detail);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if let Some(err) = &app.search_error {
-        frame.render_widget(
-            Paragraph::new(search_error_text(err)).wrap(Wrap { trim: false }),
-            inner,
-        );
+        let message = search_error_text(err);
+        let paragraph = Paragraph::new(message.as_str()).wrap(Wrap { trim: false });
+        let scroll_limit = search_error_wrapped_rows(&message, inner.width)
+            .saturating_sub(inner.height as usize)
+            .min(u16::MAX as usize);
+        let scroll = app
+            .evidence_scroll
+            .get()
+            .min(scroll_limit)
+            .min(u16::MAX as usize) as u16;
+        app.evidence_scroll.set(scroll as usize);
+        frame.render_widget(paragraph.scroll((scroll, 0)), inner);
         return;
     }
     let Some(response) = &app.search_results else {
@@ -2276,7 +2307,7 @@ fn draw_search_evidence(frame: &mut Frame, app: &App, area: Rect) {
     );
     frame.render_widget(
         Paragraph::new(clean(&detail))
-            .scroll((app.evidence_scroll.min(u16::MAX as usize) as u16, 0))
+            .scroll((app.evidence_scroll.get().min(u16::MAX as usize) as u16, 0))
             .wrap(Wrap { trim: false }),
         inner,
     );
@@ -2394,7 +2425,7 @@ mod tests {
             search_applied_query: None,
             search_error: None,
             selected_hit: 0,
-            evidence_scroll: 0,
+            evidence_scroll: Cell::new(0),
             session_error: None,
             store_status: None,
             readiness: Readiness::Loading,
@@ -3019,7 +3050,7 @@ mod tests {
                 .collect::<String>()
         };
         for (width, height) in [(72, 26), (120, 38)] {
-            app.evidence_scroll = 0;
+            app.evidence_scroll.set(0);
             let top = rendered_tui(&app, width, height);
             let compact_top = compact(&top);
             for expected in [
@@ -3036,7 +3067,7 @@ mod tests {
                 );
             }
 
-            app.evidence_scroll = 8;
+            app.evidence_scroll.set(8);
             let detail = rendered_tui(&app, width, height);
             let compact_detail = compact(&detail);
             for expected in [&source_span, &hash, &pointer, &text_span, &quote] {
@@ -3493,5 +3524,103 @@ mod tests {
         startup.begin();
         startup.settle();
         assert!(!startup.needs_request());
+    }
+
+    #[test]
+    fn v47_short_search_diagnostic_stays_visible_and_clamps_scroll() {
+        let home = TestHome::new();
+
+        for (width, height) in [(72, 26), (120, 38)] {
+            let mut app = test_app(home.store(), test_page(0, 0, Vec::new()));
+            app.navigation.screen = Screen::Search;
+            app.navigation.focus = Focus::Detail;
+            app.search_error = Some(SearchFailure::Engine(noesora_engine::SearchError::Failed(
+                Box::new(std::io::Error::other("brief diagnostic tail marker")),
+            )));
+
+            let initial = rendered_tui(&app, width, height);
+            assert!(initial.contains("brief diagnostic tail marker"));
+            assert_eq!(app.evidence_scroll.get(), 0);
+
+            app.handle_key(KeyCode::Down);
+            let after_down = rendered_tui(&app, width, height);
+            assert!(after_down.contains("brief diagnostic tail marker"));
+            assert_eq!(app.evidence_scroll.get(), 0);
+        }
+    }
+
+    #[test]
+    fn v47_long_search_diagnostic_scroll_reaches_sanitized_tail_and_reverses() {
+        let home = TestHome::new();
+        let continuation =
+            "second diagnostic line wraps safely across several terminal rows while preserving every diagnostic word. ";
+        let diagnostic = format!(
+            "first diagnostic line\u{1b}[31m\n{}final tail marker",
+            continuation.repeat(24)
+        );
+
+        for (width, height) in [(72, 26), (120, 38)] {
+            let mut app = test_app(home.store(), test_page(0, 0, Vec::new()));
+            app.navigation.screen = Screen::Search;
+            app.navigation.focus = Focus::Detail;
+            let error = noesora_engine::SearchError::Failed(Box::new(std::io::Error::other(
+                diagnostic.clone(),
+            )));
+            let stored_cause = std::error::Error::source(&error)
+                .expect("Engine error retains injected cause")
+                .to_string();
+            app.search_error = Some(SearchFailure::Engine(error));
+
+            let initial = rendered_tui(&app, width, height);
+            assert!(initial.contains("SEARCH_FAILED"));
+            assert!(initial.contains("first diagnostic line�[31m"));
+            assert!(!initial.contains('\u{1b}'));
+            assert!(!initial.contains("final tail marker"));
+            assert_eq!(app.evidence_scroll.get(), 0);
+
+            let mut at_tail = initial;
+            for _ in 0..128 {
+                app.handle_key(KeyCode::PageDown);
+                at_tail = rendered_tui(&app, width, height);
+                if at_tail.contains("final tail marker") {
+                    break;
+                }
+            }
+            assert!(
+                at_tail.contains("final tail marker"),
+                "focused diagnostic tail was not reachable at {width}x{height}: {at_tail}"
+            );
+            let tail_scroll = app.evidence_scroll.get();
+            assert!(tail_scroll > 0);
+
+            app.handle_key(KeyCode::PageDown);
+            let after_extra_down = rendered_tui(&app, width, height);
+            assert_eq!(app.evidence_scroll.get(), tail_scroll);
+            assert_eq!(after_extra_down, at_tail);
+
+            app.handle_key(KeyCode::Up);
+            assert_eq!(app.evidence_scroll.get(), tail_scroll - 1);
+            let after_up = rendered_tui(&app, width, height);
+            assert_ne!(
+                after_up, at_tail,
+                "one Up must move the rendered diagnostic"
+            );
+            app.handle_key(KeyCode::Down);
+            assert_eq!(app.evidence_scroll.get(), tail_scroll);
+            assert_eq!(rendered_tui(&app, width, height), at_tail);
+
+            let stored_error = match app.search_error.as_ref().expect("stored Engine failure") {
+                SearchFailure::Engine(error) => error,
+                SearchFailure::WorkerStart(_) => {
+                    panic!("injected failure must remain an Engine error")
+                }
+            };
+            assert_eq!(
+                std::error::Error::source(stored_error)
+                    .expect("stored Engine cause")
+                    .to_string(),
+                stored_cause
+            );
+        }
     }
 }

@@ -76,6 +76,7 @@ V43: Standalone memory host retains typed-error recovery, physical-row/EOF scrol
 V44: Memory browsing/query executes no native discovery, login, agent or archived command and changes no integration, canonical source or configuration.
 V45: Neutral v2 manifests require coordinated compatible clients. Unsupported old readers fail visibly, never silently return a partial corpus. No mixed-writer support.
 V46: Shared Engine/CLI/MCP/TUI preserve session/message identity, path/hash, pointer, event byte span, decoded-text span, quoted text, refusal/coverage and typed search errors. Actual PTY search selects a real hit and compares the rendered evidence pane with the source-verified Engine/CLI/MCP hit. Wrong selected identity/hash/span must fail that proof even if CLI search/transcript checks pass. Upstream locator metadata is not verified live evidence.
+V47: Focused search-error evidence honors scrolling, bounded by wrapped rows minus visible height and the Paragraph u16 limit. Short diagnostics stay visible. Sanitization preserves the stored typed Engine cause.
 
 ## §T TASKS
 id|status|task|cites
@@ -104,6 +105,7 @@ T20|x|neutral ingest CLI, namespace search and optional source metadata cutover|
 T21|x|shared MCP DTO/filter/error migration without changing managed authority|V5,V25,V41,V42,V46,I.mcp
 T22|x|memory-only terminal host/component with preserved sanitization, scrolling and cancellation|V12,V19,V23,V32,V36,V37,V38,V43,V44,I.cmd
 T23|~|coordinated compatibility, cross-client evidence parity, selected-hit PTY negative controls and exact-pin paired gate; exact-head remote CI remains pending|V14,V18,V20,V40,V45,V46,I.cmd,I.mcp
+T24|x|bound wrapped error-evidence scrolling; verify short/long causes, reverse keys, sanitizer and retained cause, plus actual 72/120-column typed-error/text recovery|V43,V46,V47,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
@@ -154,3 +156,5 @@ B43|2026-10-27|[VERIFIED] complete client suite reported `23 passed; 2 failed`: 
 B44|2026-10-27|[VERIFIED CI] exact pinned macOS smoke `40544122341` exposed a frame-transition false failure: a wrapped SHA row was read as `sha256:<prefix>sha256:<full>` while the next pane redraw was pending; Engine, build, unit tests, semantic fixture and Linux passed|V46; retry the current pane on the next redraw for one differing frame; fail persistent mismatch; deterministic transition test and exact macOS smoke
 B45|2026-10-28|[VERIFIED] EOF regression collected one and failed: `Down blanked the final transcript row at 72x26 (tool=false, scroll=128)` (`artifact://3187`)|V38,V43; clamp navigation to final physical row and reuse viewport history. Full CLI gates: `52 passed` (`artifact://3197`); direct 72/120-column PTY verified stable EOF, immediate reverse scrolling and source-verified selected evidence (`bg_8`).
 B46|2026-10-28|[VERIFIED] first new EOF PTY check failed `one Up did not reverse the final transcript scroll`; timing measurement at 120 columns reported `firstDrainUnchanged: True`, then `laterChanged: True` (`bg_6`)|V43,V46; compare bounded settled frames, not first readable output. Keep exact EOF reversal and evidence assertions; corrected direct PTY passed (`bg_8`).
+B47|2026-10-28|[VERIFIED] real semantic config error retained its complete CLI cause, but the 72-column evidence pane stayed at its head after 80 settled PageDown keys (`bg_11`)|V47; apply wrapped diagnostic scrolling with a stored tail clamp. Rust tests: `54 passed`; actual 72/120-column error-tail, reverse-key, normal-exit and text-recovery proof passed (`artifact://3217`).
+B48|2026-10-28|[VERIFIED] the new long-diagnostic test failed `after_up.contains("final tail marker")` (`artifact://3213`); its bottom-aligned viewport moves the final row below view on Up|V47; remove row-position assumptions and verify one Up changes the frame, one Down restores it, and extra Down remains clamped. Production logic unchanged by this test correction.
