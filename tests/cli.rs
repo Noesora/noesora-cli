@@ -159,6 +159,44 @@ fn omp_fixture(path: &Path, id: &str) -> Vec<u8> {
     bytes
 }
 
+fn neutral_fixture(
+    path: &Path,
+    namespace: &str,
+    external_id: &str,
+    project: &str,
+    content: &str,
+) -> Vec<u8> {
+    let records = [
+        json!({
+            "type": "session",
+            "schema": "noesora.session/v1",
+            "source_namespace": namespace,
+            "external_id": external_id,
+            "project": project,
+            "title": format!("Résumé {namespace}"),
+            "created_at": null,
+            "updated_at": null
+        }),
+        json!({
+            "type": "message",
+            "external_id": "opaque-message/β",
+            "role": "assistant",
+            "kind": "message",
+            "timestamp": null,
+            "payload": { "content": { "text": content } },
+            "parts": [{ "field": "/content/text", "scope": "conversation" }]
+        }),
+    ];
+    let bytes = records
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes();
+    fs::write(path, &bytes).expect("write neutral session fixture");
+    bytes
+}
+
 #[test]
 fn store_resolution_is_global_across_working_directories() {
     let fixture = Fixture::new();
@@ -230,6 +268,10 @@ fn session_import_preserves_source_and_list_show_search_share_global_store() {
     assert_eq!(listing["sessions"][0]["id"], session_id);
     assert_eq!(listing["sessions"][0]["client"], "omp");
     assert_eq!(listing["sessions"][0]["project"], "/projects/harbor");
+    assert_eq!(listing["sessions"][0]["source_namespace"], "legacy:omp");
+    assert_eq!(listing["sessions"][0]["external_id"], "session-omp-a");
+    assert!(listing["sessions"][0]["created_at"].is_string());
+    assert!(listing["sessions"][0]["updated_at"].is_string());
 
     let (show, page) = json_output(
         &mut bin(&home, &read_cwd).args([
@@ -240,6 +282,11 @@ fn session_import_preserves_source_and_list_show_search_share_global_store() {
     assert_success(&show, "session show page");
     assert_eq!(page["ok"], true);
     assert_eq!(page["session"]["id"], session_id);
+    assert_eq!(page["session"]["source_namespace"], "legacy:omp");
+    assert_eq!(page["session"]["external_id"], "session-omp-a");
+    assert_eq!(page["session"]["client"], "omp");
+    assert!(page["session"]["created_at"].is_string());
+    assert!(page["session"]["updated_at"].is_string());
     assert_eq!(page["offset"], 1);
     assert_eq!(page["messages"].as_array().unwrap().len(), 1);
     assert!(page["messages"][0]["role"].is_string());
@@ -264,13 +311,27 @@ fn session_import_preserves_source_and_list_show_search_share_global_store() {
     assert_eq!(found["mode"], "text");
     let hit = &found["hits"][0];
     for field in [
-        "id", "type", "title", "project", "client", "path", "span", "hash", "text",
+        "id",
+        "type",
+        "title",
+        "project",
+        "client",
+        "session_id",
+        "message_id",
+        "source_namespace",
+        "external_id",
+        "path",
+        "span",
+        "hash",
+        "text",
     ] {
         assert!(!hit[field].is_null(), "missing cited field {field}: {hit}");
     }
     assert_eq!(hit["project"], "/projects/harbor");
     assert_eq!(hit["client"], "omp");
     assert_eq!(hit["session_id"], session_id);
+    assert_eq!(hit["source_namespace"], "legacy:omp");
+    assert_eq!(hit["external_id"], "session-omp-a");
 
     let (refusal, no_evidence) = json_output(
         &mut bin(&home, &read_cwd).args(["search", "unknown-unrelated-phrase", "--json"]),
@@ -280,6 +341,212 @@ fn session_import_preserves_source_and_list_show_search_share_global_store() {
     assert_eq!(no_evidence["refused"], true);
     assert_eq!(no_evidence["reason"], "no_evidence");
     assert_eq!(no_evidence["truncated"], false);
+}
+
+#[test]
+fn neutral_ingest_preserves_namespaced_identity_and_independent_search_filters() {
+    let fixture = Fixture::new();
+    let home = fixture.dir("home");
+    let cwd = fixture.dir("workspace");
+    let namespace_a = "fictional.alpha";
+    let namespace_b = "fictional.beta";
+    let external_id = "opaque/session:Ω";
+    let project = "repo/harbor-λ";
+    let content = "Résumé — shared phrase Ω";
+    let alpha_path = fixture.path().join("alpha.jsonl");
+    let beta_path = fixture.path().join("beta.jsonl");
+    let alpha_bytes = neutral_fixture(&alpha_path, namespace_a, external_id, project, content);
+    let beta_bytes = neutral_fixture(&beta_path, namespace_b, external_id, project, content);
+
+    let (init, _) = json_output(&mut bin(&home, &cwd).args(["init", "--json"]), "init");
+    assert_success(&init, "initialize neutral CLI fixture");
+    let (ingest, alpha_report) = json_output(
+        &mut bin(&home, &cwd)
+            .args(["--json", "session", "ingest"])
+            .arg(&alpha_path),
+        "ingest neutral alpha session",
+    );
+    assert_success(&ingest, "ingest neutral alpha session");
+    assert_eq!(alpha_report["ok"], true);
+    assert_eq!(alpha_report["command"], "session ingest");
+    assert_eq!(alpha_report["source_namespace"], namespace_a);
+    assert_eq!(alpha_report["external_id"], external_id);
+    assert_eq!(alpha_report["project"], project);
+    assert_eq!(alpha_report["messages"], 1);
+    assert_eq!(alpha_report["duplicate"], false);
+    let alpha_id = alpha_report["session_id"]
+        .as_str()
+        .expect("Engine-generated neutral session ID")
+        .to_owned();
+    assert!(alpha_id.starts_with("mem:"));
+
+    let (duplicate, duplicate_report) = json_output(
+        &mut bin(&home, &cwd)
+            .args(["--json", "session", "ingest"])
+            .arg(&alpha_path),
+        "retry neutral alpha ingestion",
+    );
+    assert_success(&duplicate, "retry neutral alpha ingestion");
+    assert_eq!(duplicate_report["duplicate"], true);
+    assert_eq!(duplicate_report["session_id"], alpha_id.as_str());
+    assert_eq!(fs::read(&alpha_path).unwrap(), alpha_bytes);
+
+    let (ingest_beta, beta_report) = json_output(
+        &mut bin(&home, &cwd)
+            .args(["--json", "session", "ingest"])
+            .arg(&beta_path),
+        "ingest neutral beta session",
+    );
+    assert_success(&ingest_beta, "ingest neutral beta session");
+    assert_eq!(beta_report["source_namespace"], namespace_b);
+    assert_eq!(beta_report["external_id"], external_id);
+    assert_eq!(beta_report["duplicate"], false);
+    let beta_id = beta_report["session_id"]
+        .as_str()
+        .expect("Engine-generated neutral session ID");
+    assert!(beta_id.starts_with("mem:"));
+    assert_ne!(alpha_id.as_str(), beta_id);
+    assert_eq!(fs::read(&beta_path).unwrap(), beta_bytes);
+
+    let (list, listing) = json_output(
+        &mut bin(&home, &cwd).args(["--json", "session", "list"]),
+        "list neutral sessions",
+    );
+    assert_success(&list, "list neutral sessions");
+    let sessions = listing["sessions"].as_array().expect("session array");
+    assert_eq!(sessions.len(), 2);
+    let alpha = sessions
+        .iter()
+        .find(|session| session["source_namespace"] == namespace_a)
+        .expect("alpha namespace summary");
+    let beta = sessions
+        .iter()
+        .find(|session| session["source_namespace"] == namespace_b)
+        .expect("beta namespace summary");
+    for summary in [alpha, beta] {
+        assert_eq!(summary["external_id"], external_id);
+        assert_eq!(summary["project"], project);
+        assert_eq!(summary["client"], Value::Null);
+        assert_eq!(summary["created_at"], Value::Null);
+        assert_eq!(summary["updated_at"], Value::Null);
+        assert_eq!(summary["messages"], 1);
+    }
+
+    let (show, page) = json_output(
+        &mut bin(&home, &cwd).args(["--json", "session", "show", alpha_id.as_str()]),
+        "read neutral transcript",
+    );
+    assert_success(&show, "read neutral transcript");
+    assert_eq!(page["session"]["id"], alpha_id.as_str());
+    assert_eq!(page["session"]["source_namespace"], namespace_a);
+    assert_eq!(page["session"]["external_id"], external_id);
+    assert_eq!(page["session"]["client"], Value::Null);
+    assert_eq!(page["session"]["created_at"], Value::Null);
+    assert_eq!(page["session"]["updated_at"], Value::Null);
+    let message = &page["messages"][0];
+    assert!(message["id"].as_str().unwrap().starts_with("mem:"));
+    assert_ne!(message["id"], "opaque-message/β");
+    assert_eq!(message["timestamp"], Value::Null);
+    assert_eq!(message["text"], content);
+
+    for (namespace, expected_session) in [(namespace_a, alpha_id.as_str()), (namespace_b, beta_id)]
+    {
+        let (search, response) = json_output(
+            &mut bin(&home, &cwd).args([
+                "--json",
+                "search",
+                "shared phrase",
+                "--project",
+                project,
+                "--source-namespace",
+                namespace,
+            ]),
+            "search one namespace",
+        );
+        assert_success(&search, "search one namespace");
+        let hits = response["hits"].as_array().expect("search hit array");
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit["session_id"], expected_session);
+        assert_eq!(hit["source_namespace"], namespace);
+        assert_eq!(hit["external_id"], external_id);
+        assert_eq!(hit["client"], Value::Null);
+        assert!(hit["message_id"].as_str().unwrap().starts_with("mem:"));
+        assert_eq!(hit["text"], content);
+        for field in ["path", "span", "hash", "field", "text_span"] {
+            assert!(
+                !hit[field].is_null(),
+                "missing citation field {field}: {hit}"
+            );
+        }
+        assert!(!search.stdout.contains(&0x1b));
+    }
+
+    let (filtered, no_evidence) = json_output(
+        &mut bin(&home, &cwd).args([
+            "--json",
+            "search",
+            "shared phrase",
+            "--source-namespace",
+            namespace_a,
+            "--client",
+            "omp",
+        ]),
+        "combine native-client and namespace search filters",
+    );
+    assert_success(&filtered, "combine native-client and namespace filters");
+    assert_eq!(no_evidence["refused"], true);
+    assert_eq!(no_evidence["reason"], "no_evidence");
+    assert_eq!(no_evidence["hits"], json!([]));
+
+    let text = output(
+        &mut bin(&home, &cwd).args(["session", "list"]),
+        "format neutral session summaries",
+    );
+    assert_success(&text, "format neutral session summaries");
+    let text = String::from_utf8(text.stdout).expect("UTF-8 session list");
+    assert!(text.contains("source namespace fictional.alpha"));
+    assert!(text.contains("external ID opaque/session:Ω"));
+    assert!(text.contains("native client none"));
+    assert!(text.contains("unknown source time"));
+}
+
+#[test]
+fn invalid_neutral_ingest_returns_generic_error_without_publishing_a_manifest() {
+    let fixture = Fixture::new();
+    let home = fixture.dir("home");
+    let cwd = fixture.dir("workspace");
+    let path = fixture.path().join("missing-namespace.jsonl");
+    let invalid = json!({
+        "type": "session",
+        "schema": "noesora.session/v1",
+        "external_id": "opaque-session",
+        "project": "repo/example",
+        "title": "Missing namespace",
+        "created_at": null,
+        "updated_at": null,
+    });
+    fs::write(&path, format!("{invalid}\n")).expect("write invalid neutral session");
+    let (init, _) = json_output(&mut bin(&home, &cwd).args(["--json", "init"]), "init");
+    assert_success(&init, "initialize invalid neutral fixture");
+
+    let (ingest, error) = json_output(
+        &mut bin(&home, &cwd)
+            .args(["--json", "session", "ingest"])
+            .arg(&path),
+        "invalid neutral ingest",
+    );
+    assert_json_error(&ingest, &error, "invalid neutral ingest");
+    assert!(error.get("code").is_none());
+    let manifests = home.join("store/sessions/manifests/normalized/v1");
+    assert!(
+        !manifests.exists()
+            || fs::read_dir(&manifests)
+                .expect("read normalized manifest directory")
+                .next()
+                .is_none(),
+        "invalid input must not publish a normalized session manifest"
+    );
 }
 
 #[test]

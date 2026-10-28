@@ -23,5 +23,7 @@ jobs:
         run: rustfmt --edition 2021 --check src/main.rs tests/cli.rs tests/mcp.rs
       - name: Check smoke-driver syntax
         run: node --check scripts/smoke.mjs
-      - name: Explain private integration gate
-        run: echo "Full behavior and local-model checks run in the private Engine Trusted CLI workflow against this exact CLI SHA and .github/engine-revision. Public format checks are not that gate."
+      - name: Test current-frame TUI evidence transitions
+        run: python3 -m unittest discover -s tests -p 'test_tui_smoke.py' -v
+      - name: State public behavior boundary
+        run: echo "This public gate tests the evidence-pane transition checker, but does not build or run the CLI. Full native behavior and cached-model checks require the private Trusted CLI workflow at this exact CLI SHA and its full Engine pin."

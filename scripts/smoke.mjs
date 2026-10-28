@@ -191,7 +191,94 @@ try {
     assert.equal(typeof modelStatus.path, 'string');
     assert.equal(resolve(cwdA, modelStatus.path), resolve(modelPath), 'Model status must point to the isolated smoke cache');
     if (cachedModel) assert.equal(modelStatus.fingerprint, cachedModel.manifest.fingerprint, 'Copied model fingerprint changed');
+    const neutralText = 'Mauve lantern guides the archive gateway.';
+    const neutralNamespaceA = 'fictional.semantic-alpha';
+    const neutralNamespaceB = 'fictional.semantic-beta';
+    const neutralProject = '/projects/semantic';
+    const neutralExternalId = 'opaque-semantic-session';
+    const neutralAlphaPath = fixture('neutral-alpha', [
+      {
+        type: 'session',
+        schema: 'noesora.session/v1',
+        source_namespace: neutralNamespaceA,
+        external_id: neutralExternalId,
+        project: neutralProject,
+        title: 'Neutral semantic alpha',
+        created_at: null,
+        updated_at: null,
+      },
+      {
+        type: 'message',
+        external_id: 'opaque-semantic-message',
+        role: 'assistant',
+        kind: 'message',
+        timestamp: null,
+        payload: { content: { text: neutralText } },
+        parts: [{ field: '/content/text', scope: 'conversation' }],
+      },
+    ]);
+    const neutralBetaPath = fixture('neutral-beta', [
+      {
+        type: 'session',
+        schema: 'noesora.session/v1',
+        source_namespace: neutralNamespaceB,
+        external_id: neutralExternalId,
+        project: neutralProject,
+        title: 'Neutral semantic beta',
+        created_at: null,
+        updated_at: null,
+      },
+      {
+        type: 'message',
+        external_id: 'opaque-semantic-message',
+        role: 'assistant',
+        kind: 'message',
+        timestamp: null,
+        payload: { content: { text: neutralText } },
+        parts: [{ field: '/content/text', scope: 'conversation' }],
+      },
+    ]);
+    const neutralAlpha = run(['session', 'ingest', neutralAlphaPath], { extraEnv: offline });
+    const neutralBeta = run(['session', 'ingest', neutralBetaPath], { extraEnv: offline });
+    assert.equal(neutralAlpha.source_namespace, neutralNamespaceA);
+    assert.equal(neutralBeta.source_namespace, neutralNamespaceB);
+    assert.equal(neutralAlpha.client, undefined, 'Ingest report must not invent native provenance');
+    assert.equal(neutralAlpha.created_at, undefined, 'Ingest report must not invent source dates');
+    assert.equal(neutralAlpha.chunks, neutralBeta.chunks);
+    assert.equal(neutralAlpha.chunks > 0, true);
+    assert.equal(neutralAlpha.project, neutralProject);
+    assert.equal(neutralAlpha.external_id, neutralExternalId);
+    assert.equal(neutralAlpha.session_id.startsWith('mem:'), true);
+    assert.equal(neutralBeta.session_id.startsWith('mem:'), true);
+    assert.notEqual(neutralAlpha.session_id, neutralBeta.session_id);
     run(['index'], { extraEnv: offline });
+    const neutralSemantic = run(
+      [
+        'search',
+        'mauve lantern archive gateway',
+        '--mode',
+        'semantic',
+        '--project',
+        neutralProject,
+        '--source-namespace',
+        neutralNamespaceA,
+      ],
+      { extraEnv: offline },
+    );
+    assert.equal(neutralSemantic.mode, 'semantic');
+    assert.equal(neutralSemantic.index_complete, true);
+    assert.equal(neutralSemantic.total_chunks, neutralAlpha.chunks);
+    assert.equal(neutralSemantic.embedded_chunks, neutralAlpha.chunks);
+    assert.equal(neutralSemantic.hits.length, 1);
+    const neutralHit = neutralSemantic.hits[0];
+    assert.equal(neutralHit.session_id, neutralAlpha.session_id);
+    assert.equal(neutralHit.source_namespace, neutralNamespaceA);
+    assert.equal(neutralHit.external_id, neutralExternalId);
+    assert.equal(neutralHit.client, null);
+    assert.equal(neutralHit.project, neutralProject);
+    assert(neutralHit.text.includes(neutralText));
+    verify(neutralHit);
+    console.log('Neutral semantic projection and namespace-scoped citation passed; no ranking relevance claim is made.');
     const semantic = run(['search', 'where should login credentials be kept safely', '--mode', 'semantic', '--limit', '3'], { cwd: cwdB, extraEnv: offline });
     assert.equal(semantic.mode, 'semantic');
     assert.equal(semantic.index_complete, true);
@@ -226,7 +313,25 @@ try {
   // Restore only this synthetic fixture after the deliberate integrity fault.
   writeFileSync(snapshot, readFileSync(omp));
   run(['search', 'credential store']).hits.forEach(verify);
-  console.log('Global archive, all three adapters, cross-project citations, deduplication, Tools scope, readonly SQL, malformed-source and source-integrity checks passed.');
+  const tuiSmokePath = join(process.cwd(), 'scripts', 'tui-smoke.py');
+  const pythonPath = process.platform === 'darwin'
+    ? '/usr/bin:/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin'
+    : '/usr/bin:/bin:/usr/local/bin';
+  const tuiSmoke = spawnSync('python3', [tuiSmokePath, '--binary', binary], {
+    cwd: process.cwd(),
+    env: { PATH: pythonPath, TMPDIR: root, PYTHONDONTWRITEBYTECODE: '1' },
+    encoding: 'utf8',
+    timeout: 120_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  assert.ifError(tuiSmoke.error);
+  assert.equal(
+    tuiSmoke.status,
+    0,
+    'Direct memory PTY smoke failed:\n' + tuiSmoke.stdout + '\n' + tuiSmoke.stderr,
+  );
+  if (tuiSmoke.stdout) process.stdout.write(tuiSmoke.stdout);
+  console.log('Global archive, all three adapters, cross-project citations, deduplication, Tools scope, readonly SQL, malformed-source, source-integrity, neutral semantic citations and selected-memory-TUI PTY checks passed.');
 } finally {
   if (keep) console.log('Isolated smoke store retained at ' + home);
   else rmSync(root, { recursive: true, force: true });

@@ -63,6 +63,9 @@ enum Command {
         project: Option<String>,
         #[arg(long, value_enum)]
         client: Option<SearchClientArg>,
+        /// Restrict results to one exact source namespace; independent of native client.
+        #[arg(long = "source-namespace")]
+        source_namespace: Option<String>,
         #[arg(long, value_enum, default_value = "conversation")]
         scope: ContentScopeArg,
         /// Maximum returned passages, between 1 and 100.
@@ -104,8 +107,18 @@ enum Command {
         )]
         all_projects: bool,
     },
-    /// Browse local memory in the terminal.
-    Tui,
+    /// Browse local memory with optional search-scope filters.
+    Tui {
+        /// Limit search to one exact project; session browsing remains global.
+        #[arg(long)]
+        project: Option<String>,
+        /// Limit search to one native client.
+        #[arg(long, value_enum)]
+        client: Option<SearchClientArg>,
+        /// Limit search to one exact source namespace; independent of native client.
+        #[arg(long = "source-namespace")]
+        source_namespace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -116,6 +129,8 @@ enum SessionCommand {
         client: IntakeClientArg,
         path: PathBuf,
     },
+    /// Ingest one normalized noesora.session/v1 JSONL file.
+    Ingest { path: PathBuf },
     /// List global sessions, optionally filtered by project.
     List {
         #[arg(long)]
@@ -257,11 +272,22 @@ pub fn run() -> ExitCode {
             Ok(policy) => mcp::run(policy),
             Err(err) => fail(json, err),
         },
-        Command::Tui => {
+        Command::Tui {
+            project,
+            client,
+            source_namespace,
+        } => {
             if json {
                 return fail(true, "the tui command does not support --json");
             }
-            match config::open_store().and_then(crate::tui::run) {
+            let filters = SearchFilters {
+                project,
+                client: client.map(Into::into),
+                source_namespace,
+                scope: ContentScope::Conversation,
+                limit: 10,
+            };
+            match config::open_store().and_then(|store| crate::tui::run(store, filters)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => fail(false, err),
             }
@@ -316,6 +342,13 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
                     Err(err) => fail(json_output, err),
                 }
             }
+            SessionCommand::Ingest { path } => match store.ingest_session(&path) {
+                Ok(report) => {
+                    let text = format_ingest(&report);
+                    emit_command(json_output, "session ingest", report, text)
+                }
+                Err(err) => fail(json_output, err),
+            },
             SessionCommand::List {
                 project,
                 offset,
@@ -474,12 +507,14 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
             mode,
             project,
             client,
+            source_namespace,
             scope,
             limit,
         } => {
             let filters = SearchFilters {
                 project,
                 client: client.map(Into::into),
+                source_namespace,
                 scope: scope.into(),
                 limit: usize::from(limit),
             };
@@ -537,7 +572,9 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
             }
             Err(err) => fail(json_output, err),
         },
-        Command::Mcp { .. } | Command::Tui => unreachable!("handled before opening the store"),
+        Command::Mcp { .. } | Command::Tui { .. } => {
+            unreachable!("handled before opening the store")
+        }
     }
 }
 fn mcp_memory_policy(
@@ -630,6 +667,39 @@ Snapshot: {}",
         clean_terminal(&report.snapshot.display().to_string()),
     )
 }
+fn format_ingest(report: &noesora_engine::SessionIngestReport) -> String {
+    format!(
+        "Ingested session {} · source namespace {} · external ID {} · project {}\n{} messages · {} chunks{}\nSnapshot: {}",
+        clean_terminal(&report.session_id),
+        clean_terminal(&report.source_namespace),
+        clean_terminal(&report.external_id),
+        clean_terminal(&report.project),
+        report.messages,
+        report.chunks,
+        if report.duplicate {
+            " (duplicate; already ingested)"
+        } else {
+            ""
+        },
+        clean_terminal(&report.snapshot.display().to_string()),
+    )
+}
+
+fn native_client_label(client: Option<&Client>) -> &'static str {
+    match client {
+        Some(Client::Omp) => "omp",
+        Some(Client::ClaudeCode) => "claude-code",
+        Some(Client::Codex) => "codex",
+        Some(Client::Grok) => "grok",
+        Some(Client::OpenCode) => "opencode",
+        Some(Client::Cursor) => "cursor-agent",
+        None => "none",
+    }
+}
+
+fn source_time(timestamp: Option<&str>) -> &str {
+    timestamp.unwrap_or("unknown source time")
+}
 
 fn format_sessions(sessions: &[noesora_engine::SessionSummary], offset: usize) -> String {
     if sessions.is_empty() {
@@ -643,14 +713,17 @@ fn format_sessions(sessions: &[noesora_engine::SessionSummary], offset: usize) -
         }
         let _ = write!(
             output,
-            "{}. {}  [{} · {}] {} · {} messages · {}",
+            "{}. {} [project {} · source namespace {} · external ID {} · native client {}] {} · {} messages · created {} · updated {}",
             offset + index + 1,
             clean_terminal(&session.id),
             clean_terminal(&session.project),
-            session.client,
+            clean_terminal(&session.source_namespace),
+            clean_terminal(&session.external_id),
+            native_client_label(session.client.as_ref()),
             clean_terminal(&session.title),
             session.messages,
-            clean_terminal(&session.updated_at),
+            clean_terminal(source_time(session.created_at.as_deref())),
+            clean_terminal(source_time(session.updated_at.as_deref())),
         );
     }
     output
@@ -658,28 +731,25 @@ fn format_sessions(sessions: &[noesora_engine::SessionSummary], offset: usize) -
 
 fn format_transcript(page: &noesora_engine::TranscriptPage) -> String {
     let mut output = format!(
-        "Raw session {} · project {} · source {}
-Snapshot: {}
-Messages {}–{} of {}
-",
+        "Raw session {} · project {} · source namespace {} · external ID {}\nNative client: {}\nSource created: {} · updated: {}\nSnapshot: {}\nMessages {}–{} of {}\n",
         clean_terminal(&page.session.id),
         clean_terminal(&page.session.project),
-        page.session.client,
+        clean_terminal(&page.session.source_namespace),
+        clean_terminal(&page.session.external_id),
+        native_client_label(page.session.client.as_ref()),
+        clean_terminal(source_time(page.session.created_at.as_deref())),
+        clean_terminal(source_time(page.session.updated_at.as_deref())),
         clean_terminal(&page.session.snapshot),
         page.offset.saturating_add(1),
         page.offset.saturating_add(page.messages.len()),
         page.total,
     );
     for message in &page.messages {
-        let stamp = message.timestamp.as_deref().unwrap_or("-");
         output.push_str(&format!(
-            "
-[{} · {} · {}] {}
-{}
-",
+            "\n[{} · {} · {}]\n{}\n{}\n",
             clean_terminal(&message.role),
             clean_terminal(&message.kind),
-            clean_terminal(stamp),
+            clean_terminal(message.timestamp.as_deref().unwrap_or("-")),
             clean_terminal(&message.id),
             clean_terminal(&message.text),
         ));
@@ -756,40 +826,44 @@ fn format_search(response: &noesora_engine::SearchResponse) -> String {
         .hits
         .iter()
         .map(|hit| {
+            let origin = if hit.session_id.is_some() {
+                format!(
+                    "Session: {}\nMessage: {}\nSource namespace: {}\nExternal ID: {}\nNative client: {}",
+                    clean_terminal(hit.session_id.as_deref().unwrap_or("unknown session")),
+                    clean_terminal(hit.message_id.as_deref().unwrap_or("unknown message")),
+                    clean_terminal(
+                        hit.source_namespace
+                            .as_deref()
+                            .unwrap_or("unknown source namespace")
+                    ),
+                    clean_terminal(hit.external_id.as_deref().unwrap_or("unknown external ID")),
+                    native_client_label(hit.client.as_ref()),
+                )
+            } else {
+                "Source: approved record".to_owned()
+            };
             format!(
-                "{} [{}] {} · {} · {}
-ID: {}
-Type: {}
-Role: {}
-Path: {}
-Span: {}..{}
-Hash: {}
-Field: {}
-{}",
+                "{} [{}] {}\nID: {}\nType: {}\nRole: {}\n{}\nPath: {}\nSpan: {}..{}\nHash: {}\nField: {}\nDecoded text range: {}\n{}",
                 clean_terminal(&hit.title),
                 clean_terminal(&hit.kind),
                 clean_terminal(&hit.project),
-                clean_terminal(&hit.client),
-                clean_terminal(&hit.session_id.as_deref().unwrap_or("approved record")),
                 clean_terminal(&hit.id),
                 clean_terminal(&hit.kind),
                 clean_terminal(&hit.role),
+                origin,
                 clean_terminal(&hit.path),
                 hit.span[0],
                 hit.span[1],
                 clean_terminal(&hit.hash),
                 clean_terminal(hit.field.as_deref().unwrap_or("-")),
+                hit.text_span
+                    .map(|span| format!("{}..{}", span[0], span[1]))
+                    .unwrap_or_else(|| "-".to_owned()),
                 clean_terminal(&hit.text),
             )
         })
         .collect::<Vec<_>>()
-        .join(
-            "
-
----
-
-",
-        )
+        .join("\n\n---\n\n")
 }
 
 pub(crate) fn clean_terminal(text: &str) -> String {
