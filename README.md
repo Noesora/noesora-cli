@@ -38,6 +38,29 @@ cargo run -- sync
 
 No roots are discovered from the working directory, and sync is not a background watcher. To bring in existing Markdown records, use `cargo run -- import-vault /path/to/old-vault`; it imports records without modifying the originals. This does not select that vault as the CLI store. Existing vaults and session logs are not migrated implicitly.
 
+## Cloud and optional two-way sync (source checkout)
+
+The commands below are implemented in this source checkout. Login, push and pull require a configured Cloud service; this checkout is not a published release. Cloud is optional for standalone local use. The approved customer scope is invited organizations without live charges, public signup or public pricing. `source add`, `source list` and bare `sync` manage explicitly enabled local roots only. Local commands do not authenticate to or contact Cloud:
+
+```text
+noesora cloud login --url <https-api-origin>
+noesora cloud logout
+noesora cloud status
+noesora cloud push --org <id> --record <id>... [--session <id>...]
+noesora cloud push --org <id> --record <id>... [--session <id>...] --confirm <preview-sha256>
+noesora cloud pull --org <id>
+```
+
+Push discloses selected objects to one named organization. The first invocation shows the recipient, selected IDs, byte lengths, SHA-256 digests and known structured evidence references. It does not upload objects until a second invocation supplies the exact preview digest with `--confirm`. The client does not infer references from prose or file metadata. Review the selected bytes before confirming; an object can contain secrets. Sessions require explicit `--session` selection and consent to the entire exact raw snapshot. No root, all-project or all-session sharing is implicit. Original canonical bytes and project IDs remain unchanged. The client sends safe relative locators, not the local Store root or incidental storage paths. It excludes the derived SQLite index, vectors, model assets, credentials and managed-run resume receipts.
+
+A push receipt means the proposal reached Cloud; it is not organization approval, a committed canonical change or a locally applied sync event.
+
+Cloud canonical changes require current organization membership and approval of the exact reviewed bytes and evidence. A source author may approve only when authorship is verified against an active member; otherwise an assigned active steward must approve. Multi-source changes and removals require an active steward. Local frontmatter authorship, project names and session IDs do not grant approval rights.
+
+Optional CLI login uses the standard Clerk public-client Device Authorization Grant. Keep `device_code` in process memory and use OS secure storage for tokens; do not write credentials to source/config, sync sidecars, checkpoints or logs. Pull is organization-scoped: verify each event and exact object bytes before applying, and advance its durable checkpoint only after verified application. Lost replies and stale bases remain distinct; no last-write-wins or silent merge. A Cloud removal is an approved tombstone; unlinking or membership revocation does not erase local copies or backups.
+
+Daily independent backups and manual restore are the approved recovery shape, not an operating-service claim. Customer data remains gated on an implemented, verified restore and recovery review. Local use continues if Cloud is unavailable.
+
 ### Neutral session sources
 
 [VERIFIED SOURCE] Use `cargo run -- session ingest /path/to/neutral.jsonl` for explicit adapter-neutral intake. The file starts with one session header, followed by message rows:
@@ -104,9 +127,15 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 
 [VERIFIED LOCAL] The actual 72/120-column PTY flow passed global browsing, wrapped and expanded transcripts, and the archived-command canary. It selected a real search hit and checked current evidence frames against source-verified CLI/MCP IDs, path/hash, event byte span, JSON pointer, decoded-text span, and quote. The flow also checked terminal restoration before harness reset. This is synthetic local proof, not installed-harness compatibility or remote CI. [Smoke](scripts/tui-smoke.py)
 
+## Packaged installation and release boundary
+
+[PLANNED LIFECYCLE] The commands above show source-checkout use with Cargo; this README does not claim a published package, release version or supported OS/architecture. The intended npm installer requires Node.js `>=18` and acquires the versioned native executable and SHA-256 manifest during package installation. The launcher uses the installed local binary and performs no runtime download. Explicit `model install` is a separate user action that may download the pinned model; local search and other local flows do not silently install assets.
+
+Derive package version and release tag from the final `package.json` manifest, never a branch snapshot or guessed version. Build against the exact full Engine commit in `.github/engine-revision`, never a moving branch. The installer verifies the downloaded binary's SHA-256 against the GitHub Release `SHA256SUMS` over HTTPS/TLS; trust includes GitHub/TLS and the checksum's origin and is not an independent signature. Do not advertise OS/architecture support until that target has its own build, install, checksum and runtime evidence. No release or package publication is claimed here.
+
 ## Local development
 
-[VERIFIED SOURCE] `Cargo.toml` uses the private sibling `../noesora-engine`. `.github/engine-revision` pins UM1-I2 Engine commit `a9eee088525a17efc8e3dcd953dac2112e611877`. Public CI checks formatting, script syntax, and the current-frame evidence-checker transition. It does not build or run the CLI. The private gate binds exact CLI and Engine commits on Linux/macOS.
+[VERIFIED SOURCE] `Cargo.toml` uses sibling `../noesora-engine`. `.github/engine-revision` pins the locally committed Engine revision `71022345e3718b56e050edb12944e57bd260e9f0`. Local macOS arm64 verification passed 95 Engine tests and the real fixed-baseline correction/neutral compatibility driver. This is not GitHub CI or release approval. The paired release gate must check the exact CLI commit and this Engine pin on each advertised platform; never build a release from a moving branch.
 
 [VERIFIED baseline] Published R1 CLI commit `75fc796958e11419b976499649f9b35f06b56f59` passed its Linux/macOS paired checks against the earlier Engine pin. That result does not attest to this typed-error change; its focused verification is recorded separately in the PR. History import support does not establish native-agent control compatibility.
 
@@ -123,4 +152,8 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 
 [LIMITS] These local synthetic-fixture results preceded publication. They do not attest remote CI, a merge, an installed upgrade, or deployment. No model download or private-store change occurred. The declared Engine pin must match the exact private paired run.
 
+
+## Historical source-candidate baseline
+
+[PARENT-REPORTED, PRE-CHANGE] Engine candidate `a9eee088525a17efc8e3dcd953dac2112e611877` recorded format checks and 84 passing tests. Paired CLI candidate `3ed6a190f41afd3f03fd373970703a22ce02e917` recorded format checks, 54 passing tests and a locked binary build. Its fresh binary (`SHA-256 002cb70a53cd70e0e5ab9004fbb33ee67a116a55363bfbb3da812caa55345e87`) passed local cached-model and actual 72/120-column PTY smoke under OS network denial. This baseline predates the R2.1 documentation/source changes; it is not evidence for current edits, Cloud, sync, public installation, supported platforms, deployment or remote CI.
 Apache-2.0. See [LICENSE](LICENSE).

@@ -1,7 +1,7 @@
 # SPEC
 
 ## §G GOAL
-Memory-only CLI/MCP/TUI over one shared Rust Engine. Neutral/native canonical archives, cited text/semantic retrieval and explicit local intake. Native execution remains paused outside UM1-I2.
+Memory-first offline CLI/MCP/TUI over one shared Rust Engine Store. Full product also includes separate Cloud login and user-triggered selected-object two-way sync; neither is required for local use. Native execution remains paused outside UM1-I2.
 
 ## §C CONSTRAINTS
 - [USER APPROVED R1] Engine owns one global archive/store and local embedding inference; CLI owns structured commands, JSON, MCP stdio and TUI.
@@ -9,8 +9,9 @@ Memory-only CLI/MCP/TUI over one shared Rust Engine. Neutral/native canonical ar
 - Explicit session import or explicitly enabled-source sync only. Preserve original files; no automatic historical intake or source modification.
 - Conversation search default; Tools/All scope explicit; all projects default. Raw sessions distinct from approved notes/handoffs.
 - [USER APPROVED UM1-I2, 2026-10-27] Supersede active R5 native workspace scope with memory-only clients and thin capture/import/access adapters. Existing native tasks remain historical paused work, not completed or discarded.
-- Local memory/E5 needs no remote inference or runtime download. Model setup remains explicit. No Cloud, provider SDK/router/login or new credential store.
+- Local memory/E5 needs no remote inference or runtime download. Model setup remains explicit. Optional Cloud commands use a separate namespace; standard Clerk Device Authorization Grant only, OS secure token storage, no DIY auth. Cloud auth/network/provider clients stay outside Engine.
 - Memory TUI performs no native discovery/version process, agent launch, Attach action, native execution or integration/configuration write. No bottom composer or new focus framework.
+- [USER APPROVED R2.1] Cloud target = invited customer organizations, no live charges, no public self-signup/live pricing. Daily independent backups + manual restore; restore proof and production recovery decisions gate customer data.
 
 ## §I INTERFACES
 - env: `NOESORA_HOME` → application home; default `~/.noesora`.
@@ -26,6 +27,11 @@ Memory-only CLI/MCP/TUI over one shared Rust Engine. Neutral/native canonical ar
 - cmd: `noesora tui [--project <project>] [--client <client>] [--source-namespace <namespace>]` → standalone memory host. Session browsing stays global; launch filters affect search only. Host owns terminal RAII; component draws into supplied Frame/Rect.
 - cmd: `noesora --json ...` → parseable success/error object; error exit nonzero.
 - mcp: existing owner mode preserved; `mcp --managed --project <exact-id>` or `--managed --all-projects` supplies read-only search/session tools. Managed scopes disable SQL/mutation and enforce direct session-ID reads. No silent all-project default for managed connections.
+- cmd (proposed): `noesora cloud login` / `logout` / `status` → optional standard device-grant auth; local commands never invoke it.
+- cmd (proposed): `noesora cloud push --org <id> --record <id>... [--session <id>...]` → exact digest-bound recipient/object/evidence-closure preview + explicit disclosure confirmation; no root/all-session default.
+- cmd (proposed): `noesora cloud pull --org <id>` → validate/apply org-bound remote events; distinct from local `sync`.
+- files (proposed): tokens in OS secure storage; per-org links/checkpoint/outbox sidecars under shared Store; no second local database.
+- package (proposed): Node `>=18` npm installation acquires versioned native binary + SHA-256 manifest; launcher invokes installed binary with no runtime download. Version/tag derive from final manifest; builds consume full immutable Engine pin. No platform claim before per-target evidence.
 
 ## §V INVARIANTS
 V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
@@ -77,6 +83,18 @@ V44: Memory browsing/query executes no native discovery, login, agent or archive
 V45: Neutral v2 manifests require coordinated compatible clients. Unsupported old readers fail visibly, never silently return a partial corpus. No mixed-writer support.
 V46: Shared Engine/CLI/MCP/TUI preserve session/message identity, path/hash, pointer, event byte span, decoded-text span, quoted text, refusal/coverage and typed search errors. Actual PTY search selects a real hit and compares the rendered evidence pane with the source-verified Engine/CLI/MCP hit. Wrong selected identity/hash/span must fail that proof even if CLI search/transcript checks pass. Upstream locator metadata is not verified live evidence.
 V47: Focused search-error evidence honors scrolling, bounded by wrapped rows minus visible height and the Paragraph u16 limit. Short diagnostics stay visible. Sanitization preserves the stored typed Engine cause.
+V48: `cloud` namespace stays separate. Local `init/status/import/source/sync/model/index/search/query/note/tui/mcp` never require Cloud auth/network; bare `sync` remains enabled-local-root intake.
+V49: Cloud auth uses standard Clerk public-client Device Authorization Grant; tokens ∈ OS secure storage only, never source/config/checkpoint/log; `device_code` ∈ process memory only. No DIY auth or insecure fallback.
+V50: Push transfers only explicitly selected objects to one exact org. Preview binds recipient, object IDs, byte lengths, SHA-256 digests and evidence closure; require explicit disclosure confirmation. Receipt means proposal received, not approved or committed. No root, all-project or all-session default.
+V51: Shared canonical payload bytes and project IDs stay exact; no incidental Store-root/storage path in envelope. Default outbound = approved records; raw session requires explicit session selection and consent to entire exact snapshot. Never send SQLite, vectors, model assets, credentials or managed resume receipts.
+V52: Per-org links/checkpoint/outbox remain separate sidecars under one shared local Store; no new local database or `index.sqlite` authority. Org links, not project/source namespace, define Cloud scope.
+V53: Pull validates org, restore epoch, event order/hash, object digest, identity, evidence and exact bytes before apply; checkpoint advances atomically only after verified Engine receipt. Replay is idempotent; partial failure keeps last complete cursor and local outbox.
+V54: Sync is causal: stale base → visible conflict, no LWW/merge/overwrite; preserve local pending bytes and remote head. Tombstones unlink only one org from active search, preserve history/other links/local bytes; revocation never claims remote wipe.
+V55: Node `>=18` package acquisition may download a versioned binary and SHA-256 manifest at install time; launcher/runtime never downloads. Local commands, MCP/TUI and local inference remain offline after explicit setup; Cloud network occurs only through explicit `cloud` commands.
+V56: Release version/tag derive from final package manifest. Build uses exact full immutable Engine pin, never moving branch. GitHub HTTPS/TLS + matching SHA-256 manifest is trust assumption, not independent signature.
+V57: Advertise OS/architecture support only after each target's build, install, checksum and runtime evidence; configured matrix/source alone is not support proof.
+V58: Invite-only customer Cloud, no live charges/public self-signup/pricing. Daily independent backup + manual restore is approved shape, not current operational capability; customer data waits for end-to-end restore proof and approved recovery gates.
+V59: Cloud canonical write requires current org membership + approval bound to exact prepared bytes and evidence. Local author/project/session metadata grants no authority; source-author privilege requires verified member authorship, otherwise active steward; multi-source/removal needs active steward.
 
 ## §T TASKS
 id|status|task|cites
@@ -106,6 +124,13 @@ T21|x|shared MCP DTO/filter/error migration without changing managed authority|V
 T22|x|memory-only terminal host/component with preserved sanitization, scrolling and cancellation|V12,V19,V23,V32,V36,V37,V38,V43,V44,I.cmd
 T23|~|coordinated compatibility, cross-client evidence parity, selected-hit PTY negative controls and exact-pin paired gate; exact-head remote CI remains pending|V14,V18,V20,V40,V45,V46,I.cmd,I.mcp
 T24|x|bound wrapped error-evidence scrolling; verify short/long causes, reverse keys, sanitizer and retained cause, plus actual 72/120-column typed-error/text recovery|V43,V46,V47,I.cmd
+T25|.|add separate `cloud` auth/status/push/pull namespace; keep local commands Cloud-independent|V48,V49,I.cmd
+T26|.|preview exact org/object digests/evidence closure and require disclosure confirmation; block root/path leakage and default session sharing|V50,V51,I.cmd
+T27|.|add shared-Store org links, sidecars, cursor/outbox and verified pull replay|V52,V53,I.cmd,I.file
+T28|.|enforce causal conflicts, per-org tombstones and honest revocation behavior|V54,I.cmd
+T29|.|document Node `>=18` acquisition, checksum/TLS trust boundary, runtime-offline launcher, final manifest/version and immutable Engine pin|V55,V56,I.package
+T30|.|gate platform support and invited-customer data claims on per-platform and restore evidence|V57,V58,I.cmd
+T31|.|bind Cloud proposal/review authority to exact prepared bytes and live membership/steward/source-author policy; treat upload receipt as submission only|V50,V59,I.cmd
 
 ## §B BUGS
 id|date|cause|fix

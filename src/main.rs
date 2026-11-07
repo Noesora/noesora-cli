@@ -1,4 +1,5 @@
 mod cli;
+mod cloud;
 mod config;
 mod mcp;
 mod memory_policy;

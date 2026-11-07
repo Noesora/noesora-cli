@@ -7,7 +7,7 @@ use noesora_engine::{Client, ContentScope, RecordInput, SearchFilters, SearchMod
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::{config, mcp, memory_policy::MemoryPolicy};
+use crate::{cloud, config, mcp, memory_policy::MemoryPolicy};
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +41,11 @@ enum Command {
     },
     /// Import only configured, enabled source roots.
     Sync,
+    /// Explicitly connect and synchronize selected records with Cloud.
+    Cloud {
+        #[command(subcommand)]
+        action: cloud::CloudCommand,
+    },
     /// Inspect or explicitly install the local embedding model.
     Model {
         #[command(subcommand)]
@@ -264,6 +269,41 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        Command::Cloud { action } => {
+            let store = match config::open_store() {
+                Ok(store) => store,
+                Err(_) => {
+                    cloud::emit_error(
+                        json,
+                        cloud::CloudError::local_store(
+                            "The local Store could not be opened for Cloud sidecars.",
+                        ),
+                    );
+                    return ExitCode::from(2);
+                }
+            };
+            if json {
+                if config::require_json_safe_store(&store).is_err() {
+                    cloud::emit_error(
+                        json,
+                        cloud::CloudError::local_store(
+                            "The Store path cannot be represented safely in JSON output.",
+                        ),
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+            match cloud::execute(action, &store) {
+                Ok(output) => {
+                    emit(json, output.payload, clean_terminal(&output.text));
+                    output.exit
+                }
+                Err(err) => {
+                    cloud::emit_error(json, err);
+                    ExitCode::from(2)
+                }
+            }
+        }
         Command::Mcp {
             managed,
             project,
@@ -572,7 +612,7 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
             }
             Err(err) => fail(json_output, err),
         },
-        Command::Mcp { .. } | Command::Tui { .. } => {
+        Command::Mcp { .. } | Command::Tui { .. } | Command::Cloud { .. } => {
             unreachable!("handled before opening the store")
         }
     }
@@ -867,13 +907,7 @@ fn format_search(response: &noesora_engine::SearchResponse) -> String {
 }
 
 pub(crate) fn clean_terminal(text: &str) -> String {
-    text.chars()
-        .map(|ch| match ch {
-            '\n' | '\t' => ch,
-            ch if ch.is_control() => '�',
-            ch => ch,
-        })
-        .collect()
+    crate::cloud::clean_terminal(text)
 }
 
 fn emit(json_output: bool, payload: Value, text: String) {
