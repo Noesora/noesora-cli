@@ -1,0 +1,153 @@
+name: npm native package checks
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Private Engine source must never be checked out for a fork PR.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            asset: noesora-darwin-arm64
+            runner: macos-15
+            binary: target/release/noesora
+          - target: darwin-x64
+            asset: noesora-darwin-x64
+            runner: macos-15-intel
+            binary: target/release/noesora
+          - target: linux-arm64
+            asset: noesora-linux-arm64
+            runner: ubuntu-24.04-arm
+            binary: target/release/noesora
+          - target: linux-x64
+            asset: noesora-linux-x64
+            runner: ubuntu-24.04
+            binary: target/release/noesora
+          - target: win32-x64
+            asset: noesora-win32-x64.exe
+            runner: windows-2025
+            binary: target/release/noesora.exe
+    steps:
+      - name: Check out exact CLI PR head or push commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: noesora-cli
+          persist-credentials: false
+      - name: Verify exact CLI revision
+        working-directory: noesora-cli
+        shell: bash
+        env:
+          EXPECTED_CLI_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual_cli_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_cli_sha" != "$EXPECTED_CLI_SHA" ]]; then
+            echo "CLI checkout mismatch: expected $EXPECTED_CLI_SHA, got $actual_cli_sha" >&2
+            exit 1
+          fi
+          echo "Verified CLI HEAD $actual_cli_sha"
+      - name: Read and validate immutable Engine pin
+        id: engine
+        working-directory: noesora-cli
+        shell: bash
+        run: |
+          engine_sha="$(tr -d '\r\n' < .github/engine-revision)"
+          if [[ ! "$engine_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo ".github/engine-revision must contain one full lowercase 40-character SHA" >&2
+            exit 1
+          fi
+          echo "revision=$engine_sha" >> "$GITHUB_OUTPUT"
+          echo "Using pinned Engine revision $engine_sha"
+      - name: Check out exact Engine pin
+        uses: actions/checkout@v4
+        with:
+          repository: Noesora/noesora-engine
+          ref: ${{ steps.engine.outputs.revision }}
+          token: ${{ secrets.ENGINE_REPO_READ_TOKEN }}
+          path: noesora-engine
+          persist-credentials: false
+      - name: Verify exact Engine revision
+        working-directory: noesora-engine
+        shell: bash
+        env:
+          EXPECTED_ENGINE_SHA: ${{ steps.engine.outputs.revision }}
+        run: |
+          actual_engine_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_engine_sha" != "$EXPECTED_ENGINE_SHA" ]]; then
+            echo "Engine checkout mismatch: expected $EXPECTED_ENGINE_SHA, got $actual_engine_sha" >&2
+            exit 1
+          fi
+          echo "Verified Engine HEAD $actual_engine_sha"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test installer integrity and replacement behavior
+        working-directory: noesora-cli
+        run: node --test tests/install-binary.test.mjs
+      - name: Check formatting
+        working-directory: noesora-cli
+        run: cargo fmt --all -- --check
+      - name: Run Rust tests
+        working-directory: noesora-cli
+        run: cargo test --locked
+      - name: Build native CLI
+        working-directory: noesora-cli
+        run: cargo build --release --locked
+      - name: Prepare version-matched native asset
+        working-directory: noesora-cli
+        shell: bash
+        run: node scripts/prepare-release-asset.mjs --target '${{ matrix.target }}' --binary '${{ matrix.binary }}' --out '${{ runner.temp }}/noesora-release'
+      - name: Create npm package tarball
+        working-directory: noesora-cli
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/noesora-npm
+        run: |
+          node -e "require('node:fs').mkdirSync(process.env.PACK_DIR, { recursive: true })"
+          npm pack --pack-destination "$PACK_DIR" --json
+      - name: Install and exercise packed npm package offline
+        working-directory: noesora-cli
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node scripts/assert-npm-install.mjs \
+            "${{ runner.temp }}/noesora-npm/noesora-$version.tgz" \
+            "${{ runner.temp }}/noesora-release/${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noesora-native-${{ matrix.target }}
+          path: ${{ runner.temp }}/noesora-release/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  checksum-verification:
+    name: Verify five native asset checksums
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact CLI PR head or push commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/noesora-release
+          merge-multiple: true
+      - name: Generate the complete five-asset SHA-256 manifest
+        run: node scripts/write-release-checksums.mjs '${{ runner.temp }}/noesora-release'
