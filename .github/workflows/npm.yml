@@ -9,9 +9,32 @@ permissions:
   contents: read
 
 jobs:
+  environment-preflight:
+    name: Check live Engine-source environment policy
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact CLI PR head or push commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify live engine-source policy before native jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-release-policy.mjs environment engine-source
   verify:
     # Private Engine source must never be checked out for a fork PR.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: environment-preflight
+    environment:
+      name: engine-source
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -69,6 +92,15 @@ jobs:
           fi
           echo "revision=$engine_sha" >> "$GITHUB_OUTPUT"
           echo "Using pinned Engine revision $engine_sha"
+      - name: Require private Engine read credential from engine-source environment
+        shell: bash
+        env:
+          ENGINE_REPO_READ_TOKEN: ${{ secrets.ENGINE_REPO_READ_TOKEN }}
+        run: |
+          if [[ -z "$ENGINE_REPO_READ_TOKEN" ]]; then
+            echo "::error::Set the read-only ENGINE_REPO_READ_TOKEN secret in the engine-source environment to access the private Engine source."
+            exit 1
+          fi
       - name: Check out exact Engine pin
         uses: actions/checkout@v4
         with:
@@ -95,9 +127,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test installer integrity and replacement behavior
+      - name: Test installer integrity and release-policy behavior
         working-directory: noesora-cli
-        run: node --test tests/install-binary.test.mjs
+        run: node --test tests/install-binary.test.mjs tests/release-policy.test.mjs
       - name: Check formatting
         working-directory: noesora-cli
         run: cargo fmt --all -- --check

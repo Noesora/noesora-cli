@@ -95,6 +95,9 @@ V56: Release version/tag derive from final package manifest. Build uses exact fu
 V57: Advertise OS/architecture support only after each target's build, install, checksum and runtime evidence; configured matrix/source alone is not support proof.
 V58: Invite-only customer Cloud, no live charges/public self-signup/pricing. Daily independent backup + manual restore is approved shape, not current operational capability; customer data waits for end-to-end restore proof and approved recovery gates.
 V59: Cloud canonical write requires current org membership + approval bound to exact prepared bytes and evidence. Local author/project/session metadata grants no authority; source-author privilege requires verified member authorship, otherwise active steward; multi-source/removal needs active steward.
+V60: [USER APPROVED R2.2] Private Engine checkout ! protected `engine-source` job; required reviewer, explicit main/PR-merge branch rules, admin bypass disabled. Missing/unknown/denied live policy → stop before credential use. Engine read token ∈ environment only; ⊥ repository/org secret fallback.
+V61: [USER APPROVED R2.2] GitHub asset creation/npm publication ! live tag peels to exact CLI SHA. Before npm, exact five remote asset names, manifest and byte hashes ! match retained same-run CI artifacts for exact CLI/Engine pair. Remote self-consistency ≠ CI identity; installer same-origin trust unchanged.
+V62: [USER APPROVED R2.2] Existing release → refuse, except explicit original publish-job rerun with matching run marker, CLI/Engine identities, exact bytes and retained original artifacts → read-only reuse. ⊥ asset replacement/deletion or new-dispatch reuse. npm existing version/unknown state → stop for operator verification; ⊥ automatic registry retry.
 
 ## §T TASKS
 id|status|task|cites
@@ -131,6 +134,7 @@ T28|.|enforce causal conflicts, per-org tombstones and honest revocation behavio
 T29|.|document Node `>=18` acquisition, checksum/TLS trust boundary, runtime-offline launcher, final manifest/version and immutable Engine pin|V55,V56,I.package
 T30|.|gate platform support and invited-customer data claims on per-platform and restore evidence|V57,V58,I.cmd
 T31|.|bind Cloud proposal/review authority to exact prepared bytes and live membership/steward/source-author policy; treat upload receipt as submission only|V50,V59,I.cmd
+T32|x|protect Engine-source CI, bind public release to exact tag/CI bytes, permit bounded original-job read-only recovery|V60,V61,V62,I.package
 
 ## §B BUGS
 id|date|cause|fix
@@ -184,3 +188,9 @@ B46|2026-10-28|[VERIFIED] first new EOF PTY check failed `one Up did not reverse
 B47|2026-10-28|[VERIFIED] real semantic config error retained its complete CLI cause, but the 72-column evidence pane stayed at its head after 80 settled PageDown keys (`bg_11`)|V47; apply wrapped diagnostic scrolling with a stored tail clamp. Rust tests: `54 passed`; actual 72/120-column error-tail, reverse-key, normal-exit and text-recovery proof passed (`artifact://3217`).
 B48|2026-10-28|[VERIFIED] the new long-diagnostic test failed `after_up.contains("final tail marker")` (`artifact://3213`); its bottom-aligned viewport moves the final row below view on Up|V47; remove row-position assumptions and verify one Up changes the frame, one Down restores it, and extra Down remains clamped. Production logic unchanged by this test correction.
 B49|2026-11-07|[VERIFIED] isolated negative control without MCP archive provenance collected one test and failed `Null != true`; restoring the guard returned `1 passed`|V19,V44; label archived instructions as source data and tag result provenance without rewriting source bytes
+B50|2026-11-08|[VERIFIED source] same-repository PR jobs could access a repository/org Engine read secret if provisioned; observed token unavailable, no exposure shown|V60; protected environment-only credential and live policy gate
+B51|2026-11-08|[VERIFIED] release-policy regression collected 1, failed 1 with `Missing expected rejection.`: remote self-consistent bytes differed from supplied retained CI manifest|V61; bind remote manifest and bytes to original CI hashes
+B52|2026-11-08|[VERIFIED source] tag validated before build/approval interval; later `--verify-tag` checked presence rather than exact CLI commit|V61; recheck peeled tag immediately before public writes
+B53|2026-11-08|[VERIFIED source] public GitHub creation followed by later failure made immutable existing-release guard block original publish-job continuation|V62; retained same-run, exact-byte read-only recovery; no registry retry
+B54|2026-11-08|[VERIFIED source] final `npm publish` reran `prepublishOnly` without original CI manifest environment, unlike earlier standalone check|V61; keep expected manifest bound through npm lifecycle; network-denied dry-run stopped at missing expected manifest
+B55|2026-11-08|[REPORTED static review] policy tests covered missing counts/files but omitted valid-count truncation and retained-file byte/manifest disagreement|V60,V61; new refusals pass; removing either guard collected 1, failed 1

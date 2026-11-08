@@ -119,6 +119,16 @@ jobs:
           fi
           echo "engine_sha=$engine_sha" >> "$GITHUB_OUTPUT"
           echo "Verified exact CLI SHA, tag $release_tag, and full Engine pin $engine_sha"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - name: Check live protected environment policies before release builds
+        working-directory: noesora-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/check-release-policy.mjs environment engine-source
+          node scripts/check-release-policy.mjs environment npm-release
       - name: Require latest successful exact-head CLI and native CI on main
         shell: bash
         env:
@@ -143,28 +153,18 @@ jobs:
           done
       - name: Refuse an already published npm version
         working-directory: noesora-cli
-        shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          node --input-type=module <<'NODE'
-          const url = `https://registry.npmjs.org/noesora/${encodeURIComponent(process.env.RELEASE_VERSION)}`;
-          const response = await fetch(url);
-          if (response.status === 404) {
-            console.log(`No published noesora@${process.env.RELEASE_VERSION} version was found`);
-          } else if (response.ok) {
-            throw new Error(`noesora@${process.env.RELEASE_VERSION} already exists on npm`);
-          } else {
-            throw new Error(`npm registry preflight failed with HTTP ${response.status}`);
-          }
-          NODE
+        run: node scripts/check-release-policy.mjs registry
 
   release-assets:
     name: Build and package ${{ matrix.target }}
     needs: validate
-    if: ${{ github.repository == 'Noesora/noesora-cli' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'Noesora/noesora-cli' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == 1 }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    environment:
+      name: engine-source
     strategy:
       fail-fast: false
       matrix:
@@ -209,13 +209,13 @@ jobs:
             echo "CLI checkout mismatch: expected $EXPECTED_CLI_SHA, got $actual_cli_sha" >&2
             exit 1
           fi
-      - name: Require private Engine read credential
+      - name: Require private Engine read credential from engine-source environment
         shell: bash
         env:
           ENGINE_REPO_READ_TOKEN: ${{ secrets.ENGINE_REPO_READ_TOKEN }}
         run: |
           if [[ -z "$ENGINE_REPO_READ_TOKEN" ]]; then
-            echo "::error::Set the read-only ENGINE_REPO_READ_TOKEN repository secret to access the private Engine source."
+            echo "::error::Set the read-only ENGINE_REPO_READ_TOKEN secret in the engine-source environment to access the private Engine source."
             exit 1
           fi
       - name: Check out exact private Engine pin
@@ -242,9 +242,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.19.0'
-      - name: Test installer integrity and replacement behavior
+      - name: Test installer integrity and release-policy behavior
         working-directory: noesora-cli
-        run: node --test tests/install-binary.test.mjs
+        run: node --test tests/install-binary.test.mjs tests/release-policy.test.mjs
       - name: Check Rust formatting
         working-directory: noesora-cli
         run: cargo fmt --all -- --check
@@ -285,7 +285,15 @@ jobs:
   publish:
     name: Publish tagged GitHub assets and npm package
     needs: [validate, release-assets]
-    if: ${{ github.repository == 'Noesora/noesora-cli' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{
+        always() &&
+        github.repository == 'Noesora/noesora-cli' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        needs.validate.result == 'success' &&
+        (needs.release-assets.result == 'success' || github.run_attempt > 1)
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment:
@@ -315,6 +323,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.19.0'
+      - name: Recheck npm-release environment policy after approval
+        working-directory: noesora-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-release-policy.mjs environment npm-release
       - name: Require npm with OIDC trusted-publishing support
         shell: bash
         run: |
@@ -330,88 +343,65 @@ jobs:
           '
       - uses: actions/download-artifact@v4
         with:
+          pattern: noesora-release-*
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/noesora-release
           merge-multiple: true
       - name: Generate SHA256SUMS for all five native assets
         working-directory: noesora-cli
         shell: bash
         run: node scripts/write-release-checksums.mjs '${{ runner.temp }}/noesora-release'
-      - name: Ensure the matching GitHub Release does not already exist
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: v${{ inputs.version }}
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists; refusing to replace or mutate it."
-            exit 1
-          fi
-      - name: Publish exact-tag GitHub Release with five assets and checksums
+      - name: Decide create or read-only reuse from original CI artifacts
+        id: publication
         working-directory: noesora-cli
         shell: bash
         env:
+          CLI_SHA: ${{ inputs.cli_sha }}
+          ENGINE_SHA: ${{ needs.validate.outputs.engine_sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MANIFEST: ${{ runner.temp }}/noesora-release/SHA256SUMS
+        run: |
+          decision="$(node scripts/check-release-policy.mjs publication --manifest "$RELEASE_MANIFEST")"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+      - name: Publish exact-tag GitHub Release with five assets and run marker
+        if: ${{ steps.publication.outputs.decision == 'create' }}
+        working-directory: noesora-cli
+        shell: bash
+        env:
+          CLI_SHA: ${{ inputs.cli_sha }}
+          ENGINE_SHA: ${{ needs.validate.outputs.engine_sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: v${{ inputs.version }}
           RELEASE_DIR: ${{ runner.temp }}/noesora-release
         run: |
+          notes="$(node scripts/check-release-policy.mjs marker)"
+          node scripts/check-release-policy.mjs identity
           gh release create "$RELEASE_TAG" \
             --title "$RELEASE_TAG" \
             --generate-notes \
+            --notes "$notes" \
             --verify-tag \
             "$RELEASE_DIR"/noesora-* \
             "$RELEASE_DIR/SHA256SUMS"
       - name: Run package prepublish check against actual release URLs
         working-directory: noesora-cli
+        env:
+          NOESORA_RELEASE_EXPECTED_MANIFEST: ${{ runner.temp }}/noesora-release/SHA256SUMS
         run: npm run prepublishOnly
-      - name: Download each public release asset and verify its actual SHA-256
+      - name: Recheck registry and exact release identity, then publish via OIDC
         working-directory: noesora-cli
         shell: bash
         env:
+          CLI_SHA: ${{ inputs.cli_sha }}
+          ENGINE_SHA: ${{ needs.validate.outputs.engine_sha }}
           RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          const version = process.env.RELEASE_VERSION;
-          const base = `https://github.com/Noesora/noesora-cli/releases/download/v${version}`;
-          const expectedAssets = [
-            'noesora-darwin-arm64',
-            'noesora-darwin-x64',
-            'noesora-linux-arm64',
-            'noesora-linux-x64',
-            'noesora-win32-x64.exe',
-          ];
-          const manifestResponse = await fetch(`${base}/SHA256SUMS`);
-          if (!manifestResponse.ok) throw new Error(`SHA256SUMS download failed: HTTP ${manifestResponse.status}`);
-          const manifest = await manifestResponse.text();
-          const checksums = new Map();
-          for (const line of manifest.trimEnd().split(/\r?\n/)) {
-            const match = /^([a-f0-9]{64}) {2}([A-Za-z0-9._-]+)$/.exec(line);
-            if (!match || !expectedAssets.includes(match[2]) || checksums.has(match[2])) {
-              throw new Error(`Invalid or unexpected SHA256SUMS entry: ${line}`);
-            }
-            checksums.set(match[2], match[1]);
-          }
-          if (checksums.size !== expectedAssets.length || expectedAssets.some((name) => !checksums.has(name))) {
-            throw new Error('SHA256SUMS must contain exactly one digest for each of the five native assets');
-          }
-          for (const name of expectedAssets) {
-            const response = await fetch(`${base}/${encodeURIComponent(name)}`);
-            if (!response.ok || !response.body) throw new Error(`${name} download failed: HTTP ${response.status}`);
-            const hash = createHash('sha256');
-            let bytes = 0;
-            for await (const chunk of response.body) {
-              bytes += chunk.length;
-              hash.update(chunk);
-            }
-            if (bytes === 0) throw new Error(`${name} download was empty`);
-            const actual = hash.digest('hex');
-            if (actual !== checksums.get(name)) throw new Error(`${name} SHA-256 mismatch: expected ${checksums.get(name)}, got ${actual}`);
-            console.log(`Verified downloaded ${name}: sha256:${actual} (${bytes} bytes)`);
-          }
-          NODE
-      - name: Publish npm package with OIDC provenance
-        working-directory: noesora-cli
-        shell: bash
-        env:
+          GH_TOKEN: ${{ github.token }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-        run: npm publish --provenance --access public --tag "$NPM_DIST_TAG" --registry=https://registry.npmjs.org
+          NOESORA_RELEASE_EXPECTED_MANIFEST: ${{ runner.temp }}/noesora-release/SHA256SUMS
+        run: |
+          node scripts/check-release-policy.mjs registry
+          node scripts/check-release-policy.mjs identity
+          npm publish --provenance --access public --tag "$NPM_DIST_TAG" --registry=https://registry.npmjs.org
