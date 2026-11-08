@@ -9,9 +9,9 @@ By default, the application home is `~/.noesora` and the store is `~/.noesora/st
 ```bash
 cargo run -- init
 cargo run -- status
+cargo run -- note --title "Retry billing" Keep credits on the workspace.
 cargo run -- search "credits" --mode text
 cargo run -- query 'SELECT count(*) AS total FROM records'
-cargo run -- note --title "Retry billing" Keep credits on the workspace.
 cargo run -- tui
 cargo run -- mcp
 ```
