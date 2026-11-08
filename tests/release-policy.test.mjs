@@ -73,6 +73,28 @@ function manifestForAssets(assets) {
   }).join('\n') + '\n';
 }
 
+function healthyReleaseTransport(assets, requests) {
+  const manifest = manifestForAssets(assets);
+  return {
+    manifest,
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      requests.push(url.href);
+      const assetName = path.basename(url.pathname);
+      if (assetName === 'SHA256SUMS') return textResponse(manifest);
+      assert(assets.has(assetName));
+      return new Response(assets.get(assetName));
+    },
+  };
+}
+
+async function assertRejectedBaseUrlBeforeFetching(baseUrl) {
+  const requests = [];
+  const { manifest, fetchImpl } = healthyReleaseTransport(originalAssets(), requests);
+  await assert.rejects(checkReleaseAssets({ baseUrl, expectedManifest: manifest, fetchImpl }));
+  assert.deepEqual(requests, []);
+}
+
 function originalAssets() {
   return new Map(assetNames.map((name) => [name, Buffer.from(`retained CI artifact: ${name}`)]));
 }
@@ -414,6 +436,22 @@ test('V61 expected manifest accepts matching downloaded remote assets', async ()
   });
   assert.equal(requests.length, 6);
   assert(requests.every((url) => url.startsWith(baseUrl)));
+});
+
+test('release asset checks reject non-loopback base URL overrides before fetching', async () => {
+  await assertRejectedBaseUrlBeforeFetching('https://example.com/releases/noesora');
+});
+
+test('release asset checks reject loopback base URL overrides with credentials before fetching', async () => {
+  await assertRejectedBaseUrlBeforeFetching('http://user:password@127.0.0.1:43129/release');
+});
+
+test('release asset checks reject loopback base URL overrides with a query before fetching', async () => {
+  await assertRejectedBaseUrlBeforeFetching('http://127.0.0.1:43129/release?token=fixture');
+});
+
+test('release asset checks reject loopback base URL overrides with a fragment before fetching', async () => {
+  await assertRejectedBaseUrlBeforeFetching('http://127.0.0.1:43129/release#fixture');
 });
 
 test('V61 expected manifest rejects downloaded bytes that differ despite a matching remote manifest', async () => {
