@@ -120,6 +120,7 @@ MCP search Engine failures set `isError: true` and preserve `ok: false`, `code`,
 ## Terminal browser
 
 `cargo run -- tui` opens the global session browser and local cited search. The session list fetches 50 entries plus one lookahead to detect another page; transcripts page 20 messages at a time. Use ↑/↓ to move through sessions or scroll details, Enter to open a session or run a search, Tab to change focus, and PageUp/PageDown to page sessions or transcripts. In a transcript, ←/→ selects messages and `x` expands or collapses a tool message. Press `r` in the session list to refresh.
+Selected session and message text use explicit foreground and background colors.
 
 Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to run it, and `m` to switch between text and semantic search. In non-input views, `q` quits; in the search input, `q` is query text. Ctrl-C quits. Esc backs out of a detail/search view, and Esc from the session list quits.
 

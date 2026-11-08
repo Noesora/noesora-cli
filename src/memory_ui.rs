@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::theme::{sanitize_terminal_text, ACCENT, ACCENT_SOFT, INK, LINE, MUTED, RAISED, SILVER};
+use crate::theme::{sanitize_terminal_text, ACCENT, INK, LINE, MUTED, RAISED, SILVER};
 
 const SESSION_PAGE_SIZE: usize = 50;
 const SESSION_FETCH_LIMIT: usize = SESSION_PAGE_SIZE + 1;
@@ -1270,7 +1270,7 @@ fn draw_session_list(frame: &mut Frame, app: &App, area: Rect) {
     let items = app.sessions.iter().map(session_item).collect::<Vec<_>>();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(ACCENT_SOFT)
+            .bg(RAISED)
             .fg(INK)
             .add_modifier(Modifier::BOLD),
     );
@@ -1427,7 +1427,7 @@ fn transcript_lines<'a>(
         header.push(Span::raw(clean_view(stamp)));
         let mut header = Line::from(header);
         if selected {
-            header = header.style(Style::default().bg(ACCENT_SOFT));
+            header = header.style(Style::default().fg(INK).bg(RAISED));
         }
         output.push(header);
 
@@ -1440,7 +1440,7 @@ fn transcript_lines<'a>(
                 Style::default().fg(SILVER),
             );
             if selected {
-                collapsed = collapsed.style(Style::default().bg(ACCENT_SOFT));
+                collapsed = collapsed.style(Style::default().fg(INK).bg(RAISED));
             }
             output.push(collapsed);
             continue;
@@ -1449,7 +1449,7 @@ fn transcript_lines<'a>(
         if message.text.is_empty() {
             let mut empty = Line::from(Span::styled("(empty message)", Style::default().fg(MUTED)));
             if selected {
-                empty = empty.style(Style::default().bg(ACCENT_SOFT));
+                empty = empty.style(Style::default().fg(INK).bg(RAISED));
             }
             output.push(empty);
             continue;
@@ -1458,7 +1458,7 @@ fn transcript_lines<'a>(
         for text_line in message.text.lines() {
             let mut body = Line::styled(clean_view(text_line), role_style);
             if selected {
-                body = body.style(Style::default().bg(ACCENT_SOFT));
+                body = body.style(Style::default().fg(INK).bg(RAISED));
             }
             output.push(body);
         }
@@ -1759,7 +1759,7 @@ fn transcript_logical_line<'a>(
         }
     };
     if selected {
-        line.style = Style::default().bg(ACCENT_SOFT);
+        line.style = Style::default().fg(INK).bg(RAISED);
     }
     Some(line)
 }
@@ -2179,7 +2179,7 @@ fn draw_search_list(frame: &mut Frame, app: &App, area: Rect) {
         .collect::<Vec<_>>();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(ACCENT_SOFT)
+            .bg(RAISED)
             .fg(INK)
             .add_modifier(Modifier::BOLD),
     );
@@ -3621,6 +3621,221 @@ mod tests {
                     .to_string(),
                 stored_cause
             );
+        }
+    }
+
+    type RenderedCell = (String, Color, Color);
+
+    fn rendered_app_cells(
+        app: &App,
+        width: u16,
+        height: u16,
+        default_fg: Color,
+        default_bg: Color,
+    ) -> Vec<RenderedCell> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame
+                    .buffer_mut()
+                    .set_style(area, Style::default().fg(default_fg).bg(default_bg));
+                draw(frame, area, app);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| (cell.symbol().to_owned(), cell.fg, cell.bg))
+            .collect()
+    }
+
+    fn assert_rendered_cells_readable(cells: &[RenderedCell], context: &str) {
+        assert!(!cells.is_empty(), "{context}: expected rendered text cells");
+        for (symbol, fg, bg) in cells {
+            let Color::Rgb(fg_red, fg_green, fg_blue) = *fg else {
+                panic!("{context}: foreground for {symbol:?} is not explicit RGB: {fg:?}");
+            };
+            let Color::Rgb(bg_red, bg_green, bg_blue) = *bg else {
+                panic!("{context}: background for {symbol:?} is not explicit RGB: {bg:?}");
+            };
+            let contrast =
+                color_contrast_ratio((fg_red, fg_green, fg_blue), (bg_red, bg_green, bg_blue));
+            assert!(
+                contrast >= 4.5,
+                "{context}: foreground {fg:?} on background {bg:?} has contrast {contrast:.2}:1"
+            );
+        }
+    }
+
+    fn color_contrast_ratio(foreground: (u8, u8, u8), background: (u8, u8, u8)) -> f64 {
+        fn luminance((red, green, blue): (u8, u8, u8)) -> f64 {
+            let linear = |channel: u8| {
+                let channel = f64::from(channel) / 255.0;
+                if channel <= 0.04045 {
+                    channel / 12.92
+                } else {
+                    ((channel + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+
+        let foreground = luminance(foreground);
+        let background = luminance(background);
+        (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
+    }
+
+    fn assert_marker_readable(
+        cells: &[RenderedCell],
+        width: u16,
+        marker: &str,
+        context: &str,
+    ) -> (usize, usize) {
+        for (row_index, row) in cells.chunks(width as usize).enumerate() {
+            let mut text = String::new();
+            let mut byte_columns = Vec::new();
+            for (column, (symbol, _, _)) in row.iter().enumerate() {
+                text.push_str(symbol);
+                byte_columns.resize(text.len(), column);
+            }
+            let Some(start_byte) = text.find(marker) else {
+                continue;
+            };
+            let first_column = byte_columns[start_byte];
+            let last_column = byte_columns[start_byte + marker.len() - 1];
+            assert_rendered_cells_readable(
+                &row[first_column..=last_column],
+                &format!("{context}, marker {marker:?}"),
+            );
+            return (row_index, first_column);
+        }
+        panic!("{context}: rendered marker {marker:?} was not visible");
+    }
+
+    fn assert_transcript_body_row_readable(
+        cells: &[RenderedCell],
+        width: u16,
+        header_row: usize,
+        header_column: usize,
+        context: &str,
+    ) {
+        let body_row = header_row + 1;
+        let row_start = body_row * width as usize;
+        let row = &cells[row_start..row_start + width as usize];
+        let left_border = row[..header_column]
+            .iter()
+            .rposition(|(symbol, _, _)| symbol == "│")
+            .expect("transcript pane has a left border");
+        let right_border = row[header_column..]
+            .iter()
+            .position(|(symbol, _, _)| symbol == "│")
+            .map(|column| header_column + column)
+            .expect("transcript pane has a right border");
+        let mut text_cells = 0;
+        for cell in &row[left_border + 1..right_border] {
+            if cell.0.chars().all(char::is_whitespace) {
+                continue;
+            }
+            assert_rendered_cells_readable(std::slice::from_ref(cell), context);
+            text_cells += 1;
+        }
+        assert!(text_cells > 0, "{context}: expected selected body-row text");
+    }
+
+    #[test]
+    fn v63_selected_text_has_explicit_readable_colors() {
+        let terminal_defaults = [
+            ("dark", Color::White, Color::Black),
+            ("light", Color::Black, Color::White),
+        ];
+
+        for (width, height) in [(72, 26), (120, 38)] {
+            let home = TestHome::new();
+            let mut session = test_session();
+            session.title = "V63_SESSION_TITLE".to_owned();
+            session.project = "V63_PROJECT_META".to_owned();
+            session.external_id = "V63_EXTERNAL_META".to_owned();
+            session.messages = 3;
+            let mut app = test_app(home.store(), test_page(0, 0, Vec::new()));
+            app.sessions.push(session);
+            app.navigation.focus = Focus::List;
+
+            for (appearance, default_fg, default_bg) in terminal_defaults {
+                let cells = rendered_app_cells(&app, width, height, default_fg, default_bg);
+                let context = format!("{appearance} defaults, {width} columns, selected session");
+                assert_marker_readable(&cells, width, "V63_SESSION_TITLE", &context);
+                assert_marker_readable(&cells, width, "V63_PROJECT_META", &context);
+                assert_marker_readable(&cells, width, "V63_EXTERNAL_META", &context);
+            }
+        }
+
+        for (width, height) in [(72, 26), (120, 38)] {
+            for (case, role, kind, text, visible_body_marker, expanded_tool) in [
+                (
+                    "selected message",
+                    "user",
+                    "V63_HEADER_KIND",
+                    "V63_SELECTED_BODY_MARKER",
+                    Some("V63_SELECTED_BODY_MARKER"),
+                    false,
+                ),
+                (
+                    "empty message",
+                    "assistant",
+                    "V63_EMPTY_KIND",
+                    "",
+                    None,
+                    false,
+                ),
+                (
+                    "collapsed tool",
+                    "tool",
+                    "V63_COLLAPSED_KIND",
+                    "V63_COLLAPSED_TOOL_SOURCE",
+                    None,
+                    false,
+                ),
+                (
+                    "expanded tool",
+                    "tool",
+                    "V63_EXPANDED_KIND",
+                    "V63_EXPANDED_TOOL_BODY",
+                    Some("V63_EXPANDED_TOOL_BODY"),
+                    true,
+                ),
+            ] {
+                let home = TestHome::new();
+                let mut message = test_message("v63-message", role, kind, text);
+                message.timestamp = Some("V63_HEADER_STAMP".to_owned());
+                let mut app = test_app(home.store(), test_page(0, 1, vec![message]));
+                app.navigation.focus = Focus::Detail;
+                if expanded_tool {
+                    app.toggle_tool();
+                }
+
+                for (appearance, default_fg, default_bg) in terminal_defaults {
+                    let cells = rendered_app_cells(&app, width, height, default_fg, default_bg);
+                    let context = format!("{appearance} defaults, {width} columns, {case}");
+                    let (header_row, header_column) =
+                        assert_marker_readable(&cells, width, kind, &context);
+                    assert_marker_readable(&cells, width, role, &context);
+                    assert_marker_readable(&cells, width, "V63_HEADER_STAMP", &context);
+                    assert_transcript_body_row_readable(
+                        &cells,
+                        width,
+                        header_row,
+                        header_column,
+                        &context,
+                    );
+                    if let Some(marker) = visible_body_marker {
+                        assert_marker_readable(&cells, width, marker, &context);
+                    }
+                }
+            }
         }
     }
 }

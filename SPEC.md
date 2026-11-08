@@ -98,6 +98,7 @@ V59: Cloud canonical write requires current org membership + approval bound to e
 V60: [USER APPROVED R2.2] Private Engine checkout ! protected `engine-source` job; required reviewer, explicit main/PR-merge branch rules, admin bypass disabled. Missing/unknown/denied live policy → stop before credential use. Engine read token ∈ environment only; ⊥ repository/org secret fallback.
 V61: [USER APPROVED R2.2] GitHub asset creation/npm publication ! live tag peels to exact CLI SHA. Before npm, exact five remote asset names, manifest and byte hashes ! match retained same-run CI artifacts for exact CLI/Engine pair. Remote self-consistency ≠ CI identity; installer same-origin trust unchanged.
 V62: [USER APPROVED R2.2] Existing release → refuse, except explicit original publish-job rerun with matching run marker, CLI/Engine identities, exact bytes and retained original artifacts → read-only reuse. ⊥ asset replacement/deletion or new-dispatch reuse. npm existing version/unknown state → stop for operator verification; ⊥ automatic registry retry.
+V63: Selected app-rendered session/message text ! explicit effective RGB foreground/background; contrast ≥ 4.5 independent of terminal defaults.
 
 ## §T TASKS
 id|status|task|cites
@@ -195,3 +196,4 @@ B53|2026-11-08|[VERIFIED source] public GitHub creation followed by later failur
 B54|2026-11-08|[VERIFIED source] final `npm publish` reran `prepublishOnly` without original CI manifest environment, unlike earlier standalone check|V61; keep expected manifest bound through npm lifecycle; network-denied dry-run stopped at missing expected manifest
 B55|2026-11-08|[REPORTED static review] policy tests covered missing counts/files but omitted valid-count truncation and retained-file byte/manifest disagreement|V60,V61; new refusals pass; removing either guard collected 1, failed 1
 B56|2026-11-08|[REPORTED fresh-eyes review] release asset checker loopback-only URL override guard lacked rejection coverage|V56,I.package; four invalid URL cases pass; removing guard collected 4, failed 4
+B57|2026-11-08|[USER REPORTED; VERIFIED SOURCE] screenshot: selected rows/messages pale, near-white text; `src/theme.rs` INK RGB(242,244,243) over ACCENT_SOFT RGB(199,212,255) = 1.3303135:1; production selection in `src/memory_ui.rs:1271` and `src/memory_ui.rs:1761`|V63; selected lines use explicit INK foreground + RAISED background; preserve readable nested role/metadata spans
