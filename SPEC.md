@@ -1,33 +1,40 @@
 # SPEC
 
 ## §G GOAL
-Local memory + branded prompt workspace over installed coding-agent CLIs. Shared archive/E5, explicit outbound scope, interactive native requests. No new provider SDK or credential store.
+Memory-first offline CLI/MCP/TUI over one shared Rust Engine Store. Full product also includes separate Cloud login and user-triggered selected-object two-way sync; neither is required for local use. Native execution remains paused outside UM1-I2.
 
 ## §C CONSTRAINTS
 - [USER APPROVED R1] Engine owns one global archive/store and local embedding inference; CLI owns structured commands, JSON, MCP stdio and TUI.
 - Global `NOESORA_HOME` / `~/.noesora` resolution only; retire nearest-vault and MCP-only vault configuration paths. No compatibility shim selecting old vaults.
 - Explicit session import or explicitly enabled-source sync only. Preserve original files; no automatic historical intake or source modification.
 - Conversation search default; Tools/All scope explicit; all projects default. Raw sessions distinct from approved notes/handoffs.
-- [USER APPROVED R5] TUI prompt/feed uses existing native agents. Ordinary memory browsing stays read-only; confirmed run capture and integration setup are explicit exceptions.
-- Local memory/E5 needs no remote inference or runtime downloads. Native agents reuse their existing executable/provider/model/auth and may send prompts/evidence remotely after explicit run consent. No Noesora provider SDK/login.
-- No Noesora shell interpreter, command replay, graph or Cloud work. Native agents own their tools/policy. No bypass/force/analytics opt-in/system-prompt clearing or silent strict-MCP isolation.
+- [USER APPROVED UM1-I2, 2026-10-27] Supersede active R5 native workspace scope with memory-only clients and thin capture/import/access adapters. Existing native tasks remain historical paused work, not completed or discarded.
+- Local memory/E5 needs no remote inference or runtime download. Model setup remains explicit. Optional Cloud commands use a separate namespace; standard Clerk Device Authorization Grant only, OS secure token storage, no DIY auth. Cloud auth/network/provider clients stay outside Engine.
+- Memory TUI performs no native discovery/version process, agent launch, Attach action, native execution or integration/configuration write. No bottom composer or new focus framework.
+- [USER APPROVED R2.1] Cloud target = invited customer organizations, no live charges, no public self-signup/live pricing. Daily independent backups + manual restore; restore proof and production recovery decisions gate customer data.
 
 ## §I INTERFACES
 - env: `NOESORA_HOME` → application home; default `~/.noesora`.
 - cmd: `noesora init` / `status` → global store initialize/status.
 - cmd: `noesora session import --client omp|claude-code|codex <path>` → explicit archive + normalized projection; `session list` / `show` → paged session history.
+- cmd: `noesora session ingest <path>` → explicit strict neutral JSONL intake through `Store::ingest_session`; no new MCP arbitrary-file ingestion tool.
 - cmd: `noesora source add --client <client> <path>` / `source list` / `sync` → only explicitly enabled source roots.
 - cmd: `noesora model install` / `model status` / `index` → explicit assets setup and pending-vector processing.
-- cmd: `noesora search <query> --mode text|semantic [--project <project>] [--client <client>] [--scope conversation|tools|all] [--limit 1..100]` → same evidence as TUI/MCP.
+- cmd: `noesora search <query> --mode text|semantic [--project <project>] [--client <client>] [--source-namespace <namespace>] [--scope conversation|tools|all] [--limit 1..100]` → same source-verified evidence as TUI/MCP.
 - cmd: `noesora note --title <title> [--status open|done|blocked] [--file <path>]... [body]` → global approved Markdown record; project metadata optional.
 - cmd: `noesora query <sql>` → read-only capped CSV; `rebuild` → derived data recovery.
 - cmd: `noesora import-vault <path>` → explicit existing-record migration without modifying originals.
-- cmd: `noesora tui` → Noetic Gate branded prompt/feed workspace; plain input starts/continues selected native turn after preflight; `/memory`, `/agent`, `/integrations` are local views. Native requests use offered choices.
+- cmd: `noesora tui [--project <project>] [--client <client>] [--source-namespace <namespace>]` → standalone memory host. Session browsing stays global; launch filters affect search only. Host owns terminal RAII; component draws into supplied Frame/Rect.
 - cmd: `noesora --json ...` → parseable success/error object; error exit nonzero.
 - mcp: existing owner mode preserved; `mcp --managed --project <exact-id>` or `--managed --all-projects` supplies read-only search/session tools. Managed scopes disable SQL/mutation and enforce direct session-ID reads. No silent all-project default for managed connections.
+- cmd (proposed): `noesora cloud login` / `logout` / `status` → optional standard device-grant auth; local commands never invoke it.
+- cmd (proposed): `noesora cloud push --org <id> --record <id>... [--session <id>...]` → exact digest-bound recipient/object/evidence-closure preview + explicit disclosure confirmation; no root/all-session default.
+- cmd (proposed): `noesora cloud pull --org <id>` → validate/apply org-bound remote events; distinct from local `sync`.
+- files (proposed): tokens in OS secure storage; per-org links/checkpoint/outbox sidecars under shared Store; no second local database.
+- package (proposed): Node `>=18` npm installation acquires versioned native binary + SHA-256 manifest; launcher invokes installed binary with no runtime download. Version/tag derive from final manifest; builds consume full immutable Engine pin. No platform claim before per-target evidence.
 
 ## §V INVARIANTS
-V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures additionally preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
+V1: ∀ `--json` failure, incl clap parse → parseable `{ok:false,error}` on stdout & exit ≠ 0. Search Engine failures preserve `code: MODEL_UNAVAILABLE` or `SEARCH_FAILED` and exit 2; validation and healthy refusal remain distinct.
 V2: ∀ search hit → engine-backed `id,type,title,path,span,hash,text`; no evidence → explicit refusal. ⊥ generated answer.
 V3: Writes use Engine global store; imported sessions remain raw sessions. No automatic source intake or promotion.
 V4: `query` read-only & row-capped by engine; text result CSV.
@@ -45,7 +52,7 @@ V15: Explicit session import preserves source bytes and identity; unsupported/in
 V16: TUI Search/Input appends printable text, including q. Focus-aware quit semantics follow V22; Esc steps back.
 
 V17: Memory search/read epochs are separate from run/turn/request identities. Search cancellation cannot invalidate native output or pending decisions; expensive work stays off UI loop.
-V18: Missing model, incomplete index, failed indexing and genuine no-match states are distinguishable in TUI/JSON/MCP.
+V18: Missing model, incomplete index, failed indexing and no-match states are distinguishable in TUI/JSON/MCP.
 V19: Source text cannot execute terminal controls or archived commands; rendering sanitizes control characters without changing archive.
 V20: Semantic inference and session retrieval work with network disabled after explicit model setup.
 V21: Session list/reader page large history, show project/client/source identity and distinguish raw history from approved knowledge.
@@ -68,6 +75,26 @@ V36: A pending transcript result can be applied only while its requested session
 V37: Displayed session offsets describe the applied page; cancelled or failed requests cannot relabel retained rows with an uncommitted offset.
 V38: Wrapped transcript text and expanded tool content remain fully reachable by scrolling at supported pane widths without changing source data or message identity.
 V39: Public source checks cover every CLI pull request head regardless of base branch without private Engine checkout; the exact-head private paired gate remains required before merge.
+V40: Explicit neutral ingest accepts arbitrary namespaces without pretending to be native clients. CLI/MCP/TUI share one Store, not per-product databases.
+V41: All memory clients migrate together to namespace/external ID and optional native Client/source dates; absent times display explicitly unknown, never fabricated.
+V42: Namespace search filtering is independent of native-client filtering and cannot widen managed exact-project authority. No new MCP file-ingestion tool or managed mutation.
+V43: Standalone memory host retains typed-error recovery, physical-row/EOF scrolling, worker generations, readiness, paging and pre-initialization terminal RAII. No global history/focus framework or bottom composer.
+V44: Memory browsing/query executes no native discovery, login, agent or archived command and changes no integration, canonical source or configuration.
+V45: Neutral v2 manifests require coordinated compatible clients. Unsupported old readers fail visibly, never silently return a partial corpus. No mixed-writer support.
+V46: Shared Engine/CLI/MCP/TUI preserve session/message identity, path/hash, pointer, event byte span, decoded-text span, quoted text, refusal/coverage and typed search errors. Actual PTY search selects a real hit and compares the rendered evidence pane with the source-verified Engine/CLI/MCP hit. Wrong selected identity/hash/span must fail that proof even if CLI search/transcript checks pass. Upstream locator metadata is not verified live evidence.
+V47: Focused search-error evidence honors scrolling, bounded by wrapped rows minus visible height and the Paragraph u16 limit. Short diagnostics stay visible. Sanitization preserves the stored typed Engine cause.
+V48: `cloud` namespace stays separate. Local `init/status/import/source/sync/model/index/search/query/note/tui/mcp` never require Cloud auth/network; bare `sync` remains enabled-local-root intake.
+V49: Cloud auth uses standard Clerk public-client Device Authorization Grant; tokens ∈ OS secure storage only, never source/config/checkpoint/log; `device_code` ∈ process memory only. No DIY auth or insecure fallback.
+V50: Push transfers only explicitly selected objects to one exact org. Preview binds recipient, object IDs, byte lengths, SHA-256 digests and evidence closure; require explicit disclosure confirmation. Receipt means proposal received, not approved or committed. No root, all-project or all-session default.
+V51: Shared canonical payload bytes and project IDs stay exact; no incidental Store-root/storage path in envelope. Default outbound = approved records; raw session requires explicit session selection and consent to entire exact snapshot. Never send SQLite, vectors, model assets, credentials or managed resume receipts.
+V52: Per-org links/checkpoint/outbox remain separate sidecars under one shared local Store; no new local database or `index.sqlite` authority. Org links, not project/source namespace, define Cloud scope.
+V53: Pull validates org, restore epoch, event order/hash, object digest, identity, evidence and exact bytes before apply; checkpoint advances atomically only after verified Engine receipt. Replay is idempotent; partial failure keeps last complete cursor and local outbox.
+V54: Sync is causal: stale base → visible conflict, no LWW/merge/overwrite; preserve local pending bytes and remote head. Tombstones unlink only one org from active search, preserve history/other links/local bytes; revocation never claims remote wipe.
+V55: Node `>=18` package acquisition may download a versioned binary and SHA-256 manifest at install time; launcher/runtime never downloads. Local commands, MCP/TUI and local inference remain offline after explicit setup; Cloud network occurs only through explicit `cloud` commands.
+V56: Release version/tag derive from final package manifest. Build uses exact full immutable Engine pin, never moving branch. GitHub HTTPS/TLS + matching SHA-256 manifest is trust assumption, not independent signature.
+V57: Advertise OS/architecture support only after each target's build, install, checksum and runtime evidence; configured matrix/source alone is not support proof.
+V58: Invite-only customer Cloud, no live charges/public self-signup/pricing. Daily independent backup + manual restore is approved shape, not current operational capability; customer data waits for end-to-end restore proof and approved recovery gates.
+V59: Cloud canonical write requires current org membership + approval bound to exact prepared bytes and evidence. Local author/project/session metadata grants no authority; source-author privilege requires verified member authorship, otherwise active steward; multi-source/removal needs active steward.
 
 ## §T TASKS
 id|status|task|cites
@@ -92,6 +119,18 @@ T16|.|widen verified native paths to Grok/OpenCode/Cursor ACP and Codex/Claude c
 T17|.|reviewed native setup/receipt/undo and verified instruction/hook templates for installed clients|V25,V26,V28,I.cmd
 T18|.|preserve memory overlays, paging, controls and cancel-safe process lifecycle|V10,V12,V17,V19,V21,V22,V23,I.cmd
 T19|.|union behavior/protocol/scope/conflict gates and actual native/PTY proof after separate consent|V24,V25,V26,V27,V28,V29,V30,V31,I.cmd
+T20|x|neutral ingest CLI, namespace search and optional source metadata cutover|V1,V15,V40,V41,V42,V46,I.cmd
+T21|x|shared MCP DTO/filter/error migration without changing managed authority|V5,V25,V41,V42,V46,I.mcp
+T22|x|memory-only terminal host/component with preserved sanitization, scrolling and cancellation|V12,V19,V23,V32,V36,V37,V38,V43,V44,I.cmd
+T23|~|coordinated compatibility, cross-client evidence parity, selected-hit PTY negative controls and exact-pin paired gate; exact-head remote CI remains pending|V14,V18,V20,V40,V45,V46,I.cmd,I.mcp
+T24|x|bound wrapped error-evidence scrolling; verify short/long causes, reverse keys, sanitizer and retained cause, plus actual 72/120-column typed-error/text recovery|V43,V46,V47,I.cmd
+T25|.|add separate `cloud` auth/status/push/pull namespace; keep local commands Cloud-independent|V48,V49,I.cmd
+T26|.|preview exact org/object digests/evidence closure and require disclosure confirmation; block root/path leakage and default session sharing|V50,V51,I.cmd
+T27|.|add shared-Store org links, sidecars, cursor/outbox and verified pull replay|V52,V53,I.cmd,I.file
+T28|.|enforce causal conflicts, per-org tombstones and honest revocation behavior|V54,I.cmd
+T29|.|document Node `>=18` acquisition, checksum/TLS trust boundary, runtime-offline launcher, final manifest/version and immutable Engine pin|V55,V56,I.package
+T30|.|gate platform support and invited-customer data claims on per-platform and restore evidence|V57,V58,I.cmd
+T31|.|bind Cloud proposal/review authority to exact prepared bytes and live membership/steward/source-author policy; treat upload receipt as submission only|V50,V59,I.cmd
 
 ## §B BUGS
 id|date|cause|fix
@@ -134,3 +173,13 @@ B35|2026-10-23|[VERIFIED] the external PTY runner used select.select without imp
 B36|2026-10-23|[VERIFIED] the PTY readiness predicate expected insertion/title order although Engine sorts equal-timestamp sessions by source-qualified ID (bg_39)|derive or control fixture ordering while preserving exact selected-row checks
 B37|2026-10-23|[VERIFIED] a long global store path wrapped over the fixed three-row header and hid model/index readiness in the actual 120-column TUI (bg_39)|V18; bound metadata rows so readiness and query remain visible
 B38|2026-10-23|[VERIFIED] real tool transcript with an unbroken 4096-character word failed with "scroll target not reached after 128 keypresses" (artifact://2235); debugger sampled the repeated suffix scan in source_grapheme_at|V38; use the pinned lazy first-grapheme iterator; actual 72/120-column diagnostic passed (artifact://2238)
+B39|2026-10-27|[VERIFIED] UM1-I2 all-target check failed `E0505` at `src/memory_ui.rs:3002`: renderer regression kept borrowed IDs after moving the response into App|V46; retain only owned expected session/message IDs before moving the response; no full-result clone or new product invariant
+B40|2026-10-27|[VERIFIED] palette restoration exposed `E0425` for test helper return type `Color` at `src/memory_ui.rs:3225`; the runtime no longer needs a global Color import|V43; import the existing color type only inside the test module; no new product invariant
+B41|2026-10-27|[VERIFIED] selected-evidence regression collected one and failed at 72 columns although its source path was fully visible over two rows: the matcher joined vertical frame borders into the path|V46; exclude only the frame separator while retaining the exact expected source values; actual PTY proof validates the current pane separately
+B42|2026-10-27|[VERIFIED] real PTY run timed out on the global page although loaded rows were rendered; cleanup then masked that error with `termios.error: (25, Inappropriate ioctl for device)`|V12,V43,V46; semantic waits inspect the current VT frame, and terminal snapshots/reset use the owned master as in the reviewed harness; raw recording remains only for control-sequence checks
+B43|2026-10-27|[VERIFIED] complete client suite reported `23 passed; 2 failed`: a fixed twenty-row scroll did not reach a long Unicode tail, and a real bootstrap worker exceeded a five-second test deadline|V23,V38,V43; remove the incidental fixed-scroll test in favor of existing incremental-row and actual PTY coverage; make cancellation/current-result application deterministic without a disk-speed deadline
+B44|2026-10-27|[VERIFIED CI] exact pinned macOS smoke `40544122341` exposed a frame-transition false failure: a wrapped SHA row was read as `sha256:<prefix>sha256:<full>` while the next pane redraw was pending; Engine, build, unit tests, semantic fixture and Linux passed|V46; retry the current pane on the next redraw for one differing frame; fail persistent mismatch; deterministic transition test and exact macOS smoke
+B45|2026-10-28|[VERIFIED] EOF regression collected one and failed: `Down blanked the final transcript row at 72x26 (tool=false, scroll=128)` (`artifact://3187`)|V38,V43; clamp navigation to final physical row and reuse viewport history. Full CLI gates: `52 passed` (`artifact://3197`); direct 72/120-column PTY verified stable EOF, immediate reverse scrolling and source-verified selected evidence (`bg_8`).
+B46|2026-10-28|[VERIFIED] first new EOF PTY check failed `one Up did not reverse the final transcript scroll`; timing measurement at 120 columns reported `firstDrainUnchanged: True`, then `laterChanged: True` (`bg_6`)|V43,V46; compare bounded settled frames, not first readable output. Keep exact EOF reversal and evidence assertions; corrected direct PTY passed (`bg_8`).
+B47|2026-10-28|[VERIFIED] real semantic config error retained its complete CLI cause, but the 72-column evidence pane stayed at its head after 80 settled PageDown keys (`bg_11`)|V47; apply wrapped diagnostic scrolling with a stored tail clamp. Rust tests: `54 passed`; actual 72/120-column error-tail, reverse-key, normal-exit and text-recovery proof passed (`artifact://3217`).
+B48|2026-10-28|[VERIFIED] the new long-diagnostic test failed `after_up.contains("final tail marker")` (`artifact://3213`); its bottom-aligned viewport moves the final row below view on Up|V47; remove row-position assumptions and verify one Up changes the frame, one Down restores it, and extra Down remains clamped. Production logic unchanged by this test correction.

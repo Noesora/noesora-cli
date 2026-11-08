@@ -127,6 +127,66 @@ impl World {
             .to_owned()
     }
 
+    fn ingest_neutral_session(
+        &self,
+        name: &str,
+        source_namespace: &str,
+        external_id: &str,
+        project: &str,
+        text: &str,
+    ) -> String {
+        let path = self.base.join(format!("{name}.jsonl"));
+        let timestamp = Value::Null;
+        let events = [
+            json!({
+                "type": "session",
+                "schema": "noesora.session/v1",
+                "source_namespace": source_namespace,
+                "external_id": external_id,
+                "project": project,
+                "title": format!("Neutral {name}"),
+                "created_at": null,
+                "updated_at": null,
+            }),
+            json!({
+                "type": "message",
+                "external_id": format!("{external_id}-message"),
+                "role": "assistant",
+                "kind": "message",
+                "timestamp": timestamp,
+                "payload": { "text": text },
+                "parts": [{ "field": "/text", "scope": "conversation" }],
+            }),
+        ];
+        let bytes = events
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes();
+        fs::write(&path, &bytes).expect("write neutral session fixture");
+        let output = bin(&self.home, &self.cwd)
+            .args(["--json", "session", "ingest"])
+            .arg(&path)
+            .output()
+            .expect("ingest neutral session through CLI");
+        assert!(
+            output.status.success(),
+            "neutral ingest failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let report: Value = serde_json::from_slice(&output.stdout).expect("ingest report JSON");
+        assert_eq!(report["source_namespace"], source_namespace);
+        assert_eq!(report["external_id"], external_id);
+        assert_eq!(report["project"], project);
+        report["session_id"]
+            .as_str()
+            .expect("Engine-generated neutral session ID")
+            .to_owned()
+    }
+
     fn assert_no_records(&self) {
         let mut owner = self.mcp(&[]);
         let records = owner.call(
@@ -457,6 +517,9 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
         "project",
         "client",
         "session_id",
+        "message_id",
+        "source_namespace",
+        "external_id",
         "path",
         "span",
         "hash",
@@ -468,6 +531,9 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
         );
     }
     assert_eq!(hit["session_id"], world.session_id);
+    assert_eq!(hit["client"], "omp");
+    assert_eq!(hit["source_namespace"], "legacy:omp");
+    assert_eq!(hit["external_id"], "mcp-session");
 
     let listing = session.call("session_list", json!({"offset":0,"limit":5}));
     assert_eq!(listing["isError"], false, "{listing}");
@@ -475,6 +541,11 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], world.session_id);
     assert_eq!(sessions[0]["project"], "/projects/mcp");
+    assert_eq!(sessions[0]["client"], "omp");
+    assert_eq!(sessions[0]["source_namespace"], "legacy:omp");
+    assert_eq!(sessions[0]["external_id"], "mcp-session");
+    assert!(sessions[0]["created_at"].is_string());
+    assert!(sessions[0]["updated_at"].is_string());
 
     let page = session.call(
         "session_read",
@@ -482,6 +553,12 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
     );
     assert_eq!(page["isError"], false, "{page}");
     assert_eq!(page["structuredContent"]["session"]["id"], world.session_id);
+    let summary = &page["structuredContent"]["session"];
+    assert_eq!(summary["client"], "omp");
+    assert_eq!(summary["source_namespace"], "legacy:omp");
+    assert_eq!(summary["external_id"], "mcp-session");
+    assert!(summary["created_at"].is_string());
+    assert!(summary["updated_at"].is_string());
     assert_eq!(page["structuredContent"]["offset"], 1);
     assert_eq!(
         page["structuredContent"]["messages"]
@@ -497,6 +574,120 @@ fn tools_share_global_search_and_paged_raw_session_history_across_cwd() {
     assert_eq!(refused["structuredContent"]["reason"], "no_evidence");
     assert_eq!(refused["structuredContent"]["truncated"], false);
     session.finish();
+}
+
+#[test]
+fn neutral_mcp_search_keeps_namespace_metadata_and_managed_project_authority() {
+    let world = World::new();
+    let neutral_id = world.ingest_neutral_session(
+        "local-neutral",
+        "fictional.ide-alpha",
+        "neutral-session",
+        "/projects/mcp",
+        "application secrets neutral evidence marker",
+    );
+    let foreign_id = world.ingest_neutral_session(
+        "foreign-neutral",
+        "org.example.foreign",
+        "foreign-neutral-session",
+        "/projects/other",
+        "application secrets FOREIGN_NEUTRAL_PRIVATE_MARKER",
+    );
+
+    let mut owner = world.mcp(&[]);
+    let found = owner.call(
+        "search",
+        json!({
+            "query":"neutral evidence marker",
+            "source_namespace":"fictional.ide-alpha",
+            "project":"/projects/mcp",
+        }),
+    );
+    assert_eq!(found["isError"], false, "{found}");
+    let evidence = &found["structuredContent"];
+    assert_eq!(evidence["refused"], false);
+    let hits = evidence["hits"].as_array().expect("neutral search hits");
+    assert_eq!(hits.len(), 1);
+    let hit = &hits[0];
+    assert_eq!(hit["session_id"], neutral_id.as_str());
+    assert_eq!(hit["client"], Value::Null);
+    assert_eq!(hit["source_namespace"], "fictional.ide-alpha");
+    assert_eq!(hit["external_id"], "neutral-session");
+    assert!(hit["message_id"].as_str().unwrap().starts_with("mem:"));
+    for field in ["path", "span", "hash", "field", "text_span"] {
+        assert!(
+            !hit[field].is_null(),
+            "missing citation field {field}: {hit}"
+        );
+    }
+    assert_cited_session_text(&world.home, hit);
+
+    let page = owner.call(
+        "session_read",
+        json!({"id":neutral_id,"offset":0,"limit":10}),
+    );
+    assert_eq!(page["isError"], false, "{page}");
+    let summary = &page["structuredContent"]["session"];
+    assert_eq!(summary["source_namespace"], "fictional.ide-alpha");
+    assert_eq!(summary["external_id"], "neutral-session");
+    assert_eq!(summary["client"], Value::Null);
+    assert_eq!(summary["created_at"], Value::Null);
+    assert_eq!(summary["updated_at"], Value::Null);
+    owner.finish();
+
+    let mut managed = world.mcp(&["--managed", "--project", "/projects/mcp"]);
+    let scoped = managed.call(
+        "search",
+        json!({
+            "query":"neutral evidence marker",
+            "source_namespace":"fictional.ide-alpha",
+        }),
+    );
+    assert_eq!(scoped["isError"], false, "{scoped}");
+    let scoped_hits = scoped["structuredContent"]["hits"]
+        .as_array()
+        .expect("managed scoped hits");
+    assert_eq!(scoped_hits.len(), 1);
+    assert_eq!(scoped_hits[0]["session_id"], neutral_id.as_str());
+    assert_eq!(scoped_hits[0]["project"], "/projects/mcp");
+
+    let hidden = managed.call(
+        "search",
+        json!({
+            "query":"FOREIGN_NEUTRAL_PRIVATE_MARKER",
+            "source_namespace":"org.example.foreign",
+        }),
+    );
+    assert_eq!(hidden["isError"], false, "{hidden}");
+    assert_eq!(hidden["structuredContent"]["refused"], true);
+    assert!(!hidden
+        .to_string()
+        .contains("FOREIGN_NEUTRAL_PRIVATE_MARKER"));
+
+    let widened = managed.call(
+        "search",
+        json!({
+            "query":"FOREIGN_NEUTRAL_PRIVATE_MARKER",
+            "project":"/projects/other",
+            "source_namespace":"org.example.foreign",
+        }),
+    );
+    assert_eq!(widened["isError"], true, "{widened}");
+
+    let denied = managed.call(
+        "session_read",
+        json!({"id":foreign_id,"offset":0,"limit":10}),
+    );
+    assert_eq!(denied["isError"], true, "{denied}");
+    assert_eq!(
+        denied["structuredContent"]["error"],
+        "session is not available in this managed memory scope"
+    );
+    assert!(!denied
+        .to_string()
+        .contains("FOREIGN_NEUTRAL_PRIVATE_MARKER"));
+    managed.finish();
+    world.assert_no_records();
 }
 #[test]
 fn search_engine_failures_keep_codes_and_text_search_recovers_over_stdio() {
