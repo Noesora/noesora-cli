@@ -7,7 +7,7 @@ use noesora_engine::{Client, ContentScope, RecordInput, SearchFilters, SearchMod
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::{cloud, config, mcp, memory_policy::MemoryPolicy};
+use crate::{cloud, config, mcp, memory_policy::MemoryPolicy, source_discovery};
 
 #[derive(Parser)]
 #[command(
@@ -157,6 +157,15 @@ enum SessionCommand {
 
 #[derive(Subcommand)]
 enum SourceCommand {
+    /// Preview candidate session roots using metadata only (macOS and Linux).
+    Discover {
+        #[arg(
+            long,
+            default_value_t = source_discovery::DEFAULT_MAX_ENTRIES,
+            value_parser = clap::value_parser!(u32).range(1..=i64::from(source_discovery::MAX_ENTRIES))
+        )]
+        max_entries: u32,
+    },
     /// Add an explicitly enabled session source root.
     Add {
         #[arg(long, value_enum)]
@@ -269,6 +278,9 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        Command::Source {
+            action: SourceCommand::Discover { max_entries },
+        } => run_source_discovery(json, max_entries),
         Command::Cloud { action } => {
             let store = match config::open_store() {
                 Ok(store) => store,
@@ -416,6 +428,9 @@ fn run_store_command(json_output: bool, store: Store, command: Command) -> ExitC
             }
         },
         Command::Source { action } => match action {
+            SourceCommand::Discover { max_entries } => {
+                run_source_discovery(json_output, max_entries)
+            }
             SourceCommand::Add { client, path } => match store.add_source(client.into(), &path) {
                 Ok(source) => {
                     let text = format!(
@@ -797,6 +812,63 @@ fn format_transcript(page: &noesora_engine::TranscriptPage) -> String {
     output
 }
 
+fn run_source_discovery(json_output: bool, max_entries: u32) -> ExitCode {
+    let report = source_discovery::discover(max_entries);
+    let complete = report.complete;
+    let text = format_source_discovery(&report);
+    let payload = if json_output {
+        match serde_json::to_value(&report) {
+            Ok(payload) => payload,
+            Err(error) => return fail(true, error),
+        }
+    } else {
+        Value::Null
+    };
+    emit(json_output, payload, text);
+    if complete {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+fn format_source_discovery(report: &source_discovery::DiscoveryReport) -> String {
+    let mut output = format!(
+        "Source discovery {} · {} of {} child entries inspected · depth limit {}",
+        if report.complete {
+            "complete"
+        } else {
+            "incomplete"
+        },
+        report.visited_entries,
+        report.max_entries,
+        report.max_depth
+    );
+    for source in &report.sources {
+        let path = source
+            .path
+            .as_deref()
+            .map(clean_terminal)
+            .unwrap_or_else(|| "unresolved".to_owned());
+        output.push_str(&format!(
+            "\n{} {} at {} · {} · {} JSONL candidate(s) ({} bytes) · {} skipped .zst file(s) ({} bytes)",
+            source.client,
+            source.root_type,
+            path,
+            source.status,
+            source.jsonl_files,
+            source.jsonl_bytes,
+            source.compressed_files,
+            source.compressed_bytes,
+        ));
+        for error in &source.errors {
+            output.push_str("\n  ");
+            output.push_str(&clean_terminal(error));
+        }
+    }
+    output.push_str("\nUnsupported raw-history intake: OpenCode, Cursor, Grok.");
+    output
+}
 fn format_sources(sources: &[noesora_engine::SourceConfig]) -> String {
     if sources.is_empty() {
         return "No source roots configured.".to_owned();

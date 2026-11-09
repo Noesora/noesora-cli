@@ -4,6 +4,7 @@ mod config;
 mod mcp;
 mod memory_policy;
 mod memory_ui;
+mod source_discovery;
 mod theme;
 mod tui;
 
