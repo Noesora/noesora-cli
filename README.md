@@ -130,9 +130,20 @@ Press `/` to search. Type the query (including `q`), Backspace to edit, Enter to
 
 ## Packaged installation and release boundary
 
-[PLANNED LIFECYCLE] The commands above show source-checkout use with Cargo; this README does not claim a published package, release version or supported OS/architecture. The intended npm installer requires Node.js `>=18` and acquires the versioned native executable and SHA-256 manifest during package installation. The launcher uses the installed local binary and performs no runtime download. Explicit `model install` is a separate user action that may download the pinned model; local search and other local flows do not silently install assets.
+[PLANNED LIFECYCLE] The commands above show source-checkout use with Cargo; this README does not claim a published package, release version or supported OS/architecture. The intended npm installer requires Node.js `>=18` and acquires the versioned native executable and SHA-256 manifest during package installation. Launcher uses the installed local binary; it never downloads the binary at runtime. Explicit `model install` is a separate user action that may download the pinned model; local search and other local flows do not silently install assets.
+
+[NPM-GLOBAL UPDATE CHECK] Automatic checks require a verified, plain-directory npm-global installation. No-argument and `tui` launches must have all three standard streams on a TTY. The helper makes one credential-free `GET` to `https://registry.npmjs.org/noesora/latest` and refuses redirects. The registry sees the request and source IP, but receives no command, project, store or session data. The lookup has a one-second total deadline and a 65,536-byte decoded body limit. It has no cache. Failed, oversized or stalled responses continue with the installed CLI without a prompt.
+
+The helper selects npm only from closest runtime root tied to trusted running Node's `process.execPath`. If that root lacks paired npm, helper skips; no outer alias/backlink fallback. `npm_execpath` and `PATH` hints do not authorize execution. Owner probes use trusted runtime-install cwd, offline mode, disabled lifecycle scripts and update notifier, with bounded timeouts. Ambiguous or split layouts require manual updates.
+
+Only a strict-SemVer `noesora` release newer than the installed version prompts on stderr: `Noesora <version> is available. Update now? [y/N]`. `y` installs that exact version through the verified npm CLI and bound prefix, with lifecycle scripts enabled. `n`, empty input and EOF do not install. JSON, MCP, help/version, other commands and piped launches do not check or prompt. Standalone source-checkout updates remain manual. The helper does not use sudo, overwrite vendor files or replay the native command.
+
+After `y`, helper hashes bounded bytes from opened executable descriptor, bound to expected path with descriptor stat checks before and after. If installation fails or returns wrong identity, fallback requires valid old manifest and file shape plus executable bytes matching snapshot; otherwise helper refuses native launch. It does not restore vendor files. Snapshot cannot authenticate initial compromise or fully fence same-user prefix races; existing checksum and npm lifecycle trust remain, without independent signature proof.
+
+Tests use isolated npm prefixes and controlled release services. Their results apply only to the tested targets and npm versions. Public-registry upgrades and Windows behavior remain unverified. This source change does not update the standalone trial executable or publish a release.
 
 Derive package version and release tag from the final `package.json` manifest, never a branch snapshot or guessed version. Build against the exact full Engine commit in `.github/engine-revision`, never a moving branch. The installer verifies the downloaded binary's SHA-256 against the GitHub Release `SHA256SUMS` over HTTPS/TLS; trust includes GitHub/TLS and the checksum's origin and is not an independent signature. Do not advertise OS/architecture support until that target has its own build, install, checksum and runtime evidence. No release or package publication is claimed here.
+Public source CI runs package checks on Node.js 18 and 22 in one job; native artifact matrix remains unchanged.
 
 ## Local development
 
