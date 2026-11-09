@@ -6,10 +6,12 @@
   "repository": "github:Noesora/noesora-cli",
   "type": "commonjs",
   "engines": { "node": ">=18" },
+  "dependencies": { "semver": "7.8.6" },
   "bin": { "noesora": "bin/noesora.js" },
   "files": [
     "bin/noesora.js",
     "scripts/install-binary.mjs",
+    "scripts/update-check.cjs",
     "scripts/check-release-assets.mjs",
     "README.md",
     "LICENSE",

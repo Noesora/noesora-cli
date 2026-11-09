@@ -127,6 +127,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install locked Node test dependencies
+        working-directory: noesora-cli
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test installer integrity and release-policy behavior
         working-directory: noesora-cli
         run: node --test tests/install-binary.test.mjs tests/release-policy.test.mjs
