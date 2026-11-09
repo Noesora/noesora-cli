@@ -51,6 +51,34 @@ fn bin(home: &Path, cwd: &Path) -> Command {
         .current_dir(cwd);
     command
 }
+fn discovery_bin(noesora_home: &Path, native_home: &Path, cwd: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_noesora"));
+    command
+        .env("NOESORA_HOME", noesora_home)
+        .env("HOME", native_home)
+        .env_remove("USERPROFILE")
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("OMP_PROFILE")
+        .env_remove("PI_PROFILE")
+        .env_remove("PI_CONFIG_DIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .args(["--json", "source", "discover"])
+        .env("PATH", cwd)
+        .current_dir(cwd);
+    command
+}
+
+fn assert_discovery_failure(out: &Output, report: &Value, label: &str) {
+    assert_eq!(out.status.code(), Some(2), "{label}: {out:?}");
+    assert_eq!(report["ok"], false, "{label}: {report}");
+    assert_eq!(report["command"], "source discover", "{label}: {report}");
+    assert_eq!(report["complete"], false, "{label}: {report}");
+}
 
 fn output(command: &mut Command, label: &str) -> Output {
     command
@@ -1475,4 +1503,929 @@ fn search_client_filters_cover_six_clients_but_intake_remains_three_client_only(
         );
         assert_json_error(&add, &error, "unsupported source client");
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod discovery {
+    use super::*;
+
+    #[test]
+    fn v64_discovery_reports_candidates_without_creating_store() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let omp_root = native_home.join(".omp/agent/sessions");
+        let claude_root = native_home.join(".claude/projects");
+        let codex_root = native_home.join(".codex/sessions");
+        let archived_root = native_home.join(".codex/archived_sessions");
+        for root in [&omp_root, &claude_root, &codex_root, &archived_root] {
+            fs::create_dir_all(root).expect("create fixture session root");
+        }
+
+        let invalid_jsonl = b"\xffinvalid JSONL payload V64_DISCOVERY_PAYLOAD_SECRET\n";
+        let omp_compressed = b"opaque compressed bytes";
+        let claude_jsonl = b"metadata-only Claude candidate\n";
+        let codex_jsonl = b"metadata-only Codex candidate\n";
+        let archived_jsonl = b"metadata-only archived candidate\n";
+        fs::write(
+            omp_root.join("V64_DISCOVERY_CHILD_FILENAME_SECRET.jsonl"),
+            invalid_jsonl,
+        )
+        .expect("write malformed OMP JSONL candidate");
+        fs::write(
+            omp_root.join("V64_DISCOVERY_COMPRESSED_FILENAME_SECRET.zst"),
+            omp_compressed,
+        )
+        .expect("write opaque OMP compressed candidate");
+        fs::write(
+            omp_root.join("V64_DISCOVERY_IGNORED_FILENAME_SECRET.JSONL"),
+            b"uppercase extension is not a candidate",
+        )
+        .expect("write ignored uppercase extension");
+        fs::write(omp_root.join("unrelated.md"), b"not a session candidate")
+            .expect("write unrelated file");
+        fs::write(claude_root.join("claude.jsonl"), claude_jsonl).expect("write Claude candidate");
+        fs::write(codex_root.join("codex.jsonl"), codex_jsonl).expect("write Codex candidate");
+        fs::write(archived_root.join("archived.jsonl"), archived_jsonl)
+            .expect("write archived Codex candidate");
+
+        assert!(!noesora_home.exists());
+        let (out, report) = json_output(
+            &mut discovery_bin(&noesora_home, &native_home, &cwd),
+            "source discover with isolated native roots",
+        );
+        assert_success(&out, "source discover with isolated native roots");
+        assert!(out.stderr.is_empty(), "unexpected stderr: {out:?}");
+
+        assert_eq!(
+            report,
+            json!({
+                "ok": true,
+                "command": "source discover",
+                "complete": true,
+                "max_entries": 100000,
+                "visited_entries": 7,
+                "max_depth": 16,
+                "sources": [
+                    {
+                        "client": "omp",
+                        "root_type": "sessions",
+                        "path": omp_root.to_str().expect("UTF-8 OMP root"),
+                        "status": "found",
+                        "jsonl_files": 1,
+                        "jsonl_bytes": invalid_jsonl.len() as u64,
+                        "compressed_files": 1,
+                        "compressed_bytes": omp_compressed.len() as u64,
+                        "complete": true,
+                        "errors": []
+                    },
+                    {
+                        "client": "claude-code",
+                        "root_type": "sessions",
+                        "path": claude_root.to_str().expect("UTF-8 Claude root"),
+                        "status": "found",
+                        "jsonl_files": 1,
+                        "jsonl_bytes": claude_jsonl.len() as u64,
+                        "compressed_files": 0,
+                        "compressed_bytes": 0,
+                        "complete": true,
+                        "errors": []
+                    },
+                    {
+                        "client": "codex",
+                        "root_type": "sessions",
+                        "path": codex_root.to_str().expect("UTF-8 Codex root"),
+                        "status": "found",
+                        "jsonl_files": 1,
+                        "jsonl_bytes": codex_jsonl.len() as u64,
+                        "compressed_files": 0,
+                        "compressed_bytes": 0,
+                        "complete": true,
+                        "errors": []
+                    },
+                    {
+                        "client": "codex",
+                        "root_type": "archived_sessions",
+                        "path": archived_root.to_str().expect("UTF-8 archived Codex root"),
+                        "status": "found",
+                        "jsonl_files": 1,
+                        "jsonl_bytes": archived_jsonl.len() as u64,
+                        "compressed_files": 0,
+                        "compressed_bytes": 0,
+                        "complete": true,
+                        "errors": []
+                    }
+                ],
+                "unsupported_clients": ["opencode", "cursor-agent", "grok"]
+            }),
+            "discovery reports metadata for all roots in contract order"
+        );
+
+        let rendered = String::from_utf8_lossy(&out.stdout);
+        for forbidden in [
+            "V64_DISCOVERY_PAYLOAD_SECRET",
+            "V64_DISCOVERY_CHILD_FILENAME_SECRET.jsonl",
+            "V64_DISCOVERY_COMPRESSED_FILENAME_SECRET.zst",
+            "V64_DISCOVERY_IGNORED_FILENAME_SECRET.JSONL",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "discovery leaked {forbidden}: {rendered}"
+            );
+        }
+
+        assert!(!noesora_home.exists(), "discovery created NOESORA_HOME");
+        assert!(
+            !native_home.join("store").exists(),
+            "discovery created a Store"
+        );
+        assert!(
+            !native_home.join(".noesora").exists(),
+            "discovery created a default Store"
+        );
+        assert!(!cwd.join("store").exists(), "discovery created a cwd Store");
+        assert!(
+            !cwd.join(".noesora").exists(),
+            "discovery created a cwd manifest"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_marks_entry_cap_incomplete_and_keeps_other_rows() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let omp_root = native_home.join(".omp/agent/sessions");
+        let claude_root = native_home.join(".claude/projects");
+        let codex_root = native_home.join(".codex/sessions");
+        let archived_root = native_home.join(".codex/archived_sessions");
+        for root in [&omp_root, &claude_root, &codex_root, &archived_root] {
+            fs::create_dir_all(root).expect("create fixture session root");
+        }
+        fs::write(omp_root.join("omp.jsonl"), b"omp").expect("write OMP candidate");
+        fs::write(claude_root.join("claude.jsonl"), b"claude").expect("write Claude candidate");
+        for name in ["one.jsonl", "two.jsonl", "three.jsonl"] {
+            fs::write(codex_root.join(name), b"codex").expect("write Codex candidate");
+        }
+        fs::write(archived_root.join("archived.jsonl"), b"archived")
+            .expect("write archived Codex candidate");
+
+        let (out, report) = json_output(
+            &mut discovery_bin(&noesora_home, &native_home, &cwd)
+                .arg("--max-entries")
+                .arg("3"),
+            "source discover at entry cap",
+        );
+        assert_discovery_failure(&out, &report, "source discover at entry cap");
+        assert_eq!(report["max_entries"], 3);
+        assert_eq!(report["visited_entries"], 3);
+        assert_eq!(report["max_depth"], 16);
+
+        let sources = report["sources"].as_array().expect("discovery source rows");
+        assert_eq!(sources.len(), 4, "cap discarded later root rows: {report}");
+        assert_eq!(sources[0]["client"], "omp");
+        assert_eq!(sources[0]["root_type"], "sessions");
+        assert_eq!(sources[0]["status"], "found");
+        assert_eq!(sources[0]["complete"], true);
+        assert_eq!(sources[1]["client"], "claude-code");
+        assert_eq!(sources[1]["status"], "found");
+        assert_eq!(sources[1]["complete"], true);
+        assert_eq!(sources[2]["client"], "codex");
+        assert_eq!(sources[2]["root_type"], "sessions");
+        assert_eq!(sources[2]["status"], "incomplete");
+        assert_eq!(sources[2]["complete"], false);
+        assert_eq!(sources[3]["client"], "codex");
+        assert_eq!(sources[3]["root_type"], "archived_sessions");
+        assert_eq!(sources[3]["status"], "incomplete");
+        assert_eq!(sources[3]["complete"], false);
+        assert!(
+            !noesora_home.exists(),
+            "entry-capped discovery created Store"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_marks_depth_cap_incomplete_and_scans_other_roots() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let omp_root = native_home.join(".omp/agent/sessions");
+        fs::create_dir_all(&omp_root).expect("create OMP root");
+        let mut nested = omp_root;
+        for level in 0..17 {
+            nested = nested.join(format!("level-{level}"));
+            fs::create_dir(&nested).expect("create nested OMP directory");
+            if level == 14 {
+                fs::write(nested.join("at-depth-sixteen.jsonl"), b"depth boundary")
+                    .expect("write included depth-boundary candidate");
+            } else if level == 15 {
+                fs::write(
+                    nested.join("beyond-depth-sixteen.jsonl"),
+                    b"excluded candidate",
+                )
+                .expect("write excluded depth-boundary candidate");
+            }
+        }
+        let claude_root = native_home.join(".claude/projects");
+        fs::create_dir_all(&claude_root).expect("create Claude root");
+        fs::write(claude_root.join("claude.jsonl"), b"claude")
+            .expect("write independent Claude candidate");
+
+        let (out, report) = json_output(
+            &mut discovery_bin(&noesora_home, &native_home, &cwd),
+            "source discover beyond maximum depth",
+        );
+        assert_discovery_failure(&out, &report, "source discover beyond maximum depth");
+        assert_eq!(report["max_depth"], 16);
+        let sources = report["sources"].as_array().expect("discovery source rows");
+        assert_eq!(
+            sources.len(),
+            4,
+            "depth cap discarded other root rows: {report}"
+        );
+        assert_eq!(sources[0]["client"], "omp");
+        assert_eq!(sources[0]["root_type"], "sessions");
+        assert_eq!(sources[0]["status"], "incomplete");
+        assert_eq!(sources[0]["complete"], false);
+        assert_eq!(sources[0]["jsonl_files"], 1);
+        assert_eq!(sources[0]["jsonl_bytes"], b"depth boundary".len() as u64);
+        assert_eq!(report["visited_entries"], 18);
+        assert_eq!(sources[1]["client"], "claude-code");
+        assert_eq!(sources[1]["status"], "found");
+        assert_eq!(sources[1]["complete"], true);
+        assert_eq!(sources[1]["jsonl_files"], 1);
+        assert!(
+            !noesora_home.exists(),
+            "depth-capped discovery created Store"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_distinguishes_missing_and_unhandled_roots() {
+        let fixture = Fixture::new();
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+        let missing_home = fs::canonicalize(fixture.dir("native-missing"))
+            .expect("canonical missing-root fixture home");
+        let (missing_out, missing_report) = json_output(
+            &mut discovery_bin(&noesora_home, &missing_home, &cwd),
+            "source discover with missing roots",
+        );
+        assert_success(&missing_out, "source discover with missing roots");
+        assert_eq!(missing_report["ok"], true);
+        assert_eq!(missing_report["complete"], true);
+        assert_eq!(missing_report["visited_entries"], 0);
+        let missing_sources = missing_report["sources"]
+            .as_array()
+            .expect("missing discovery source rows");
+        let expected_missing = [
+            ("omp", "sessions", missing_home.join(".omp/agent/sessions")),
+            (
+                "claude-code",
+                "sessions",
+                missing_home.join(".claude/projects"),
+            ),
+            ("codex", "sessions", missing_home.join(".codex/sessions")),
+            (
+                "codex",
+                "archived_sessions",
+                missing_home.join(".codex/archived_sessions"),
+            ),
+        ];
+        assert_eq!(missing_sources.len(), expected_missing.len());
+        for (row, (client, root_type, path)) in missing_sources.iter().zip(expected_missing) {
+            assert_eq!(row["client"], client);
+            assert_eq!(row["root_type"], root_type);
+            assert_eq!(row["path"], path.to_str().expect("UTF-8 missing root"));
+            assert_eq!(row["status"], "missing");
+            assert_eq!(row["jsonl_files"], 0);
+            assert_eq!(row["jsonl_bytes"], 0);
+            assert_eq!(row["compressed_files"], 0);
+            assert_eq!(row["compressed_bytes"], 0);
+            assert_eq!(row["complete"], true);
+            assert_eq!(row["errors"], json!([]));
+        }
+
+        let invalid_home = fs::canonicalize(fixture.dir("native-invalid"))
+            .expect("canonical invalid-root fixture home");
+        let invalid_root = invalid_home.join(".omp/agent/sessions");
+        fs::create_dir_all(invalid_root.parent().expect("OMP root parent"))
+            .expect("create OMP root parent");
+        fs::write(&invalid_root, b"not a directory").expect("create invalid OMP root type");
+        let (invalid_out, invalid_report) = json_output(
+            &mut discovery_bin(&noesora_home, &invalid_home, &cwd),
+            "source discover with invalid root type",
+        );
+        assert_discovery_failure(
+            &invalid_out,
+            &invalid_report,
+            "source discover with invalid root type",
+        );
+        assert_eq!(invalid_report["sources"][0]["status"], "incomplete");
+        assert_eq!(
+            invalid_report["sources"][0]["path"],
+            invalid_root.to_str().unwrap()
+        );
+        assert_eq!(invalid_report["sources"][0]["complete"], false);
+        assert!(
+            invalid_report["sources"][0]["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty()),
+            "invalid root type omitted root error: {invalid_report}"
+        );
+        assert_eq!(invalid_report["sources"][1]["status"], "missing");
+        assert_eq!(invalid_report["sources"][1]["complete"], true);
+
+        let override_home = fs::canonicalize(fixture.dir("native-relative-override"))
+            .expect("canonical relative-override fixture home");
+        let relative_omp = cwd.join("relative-omp/sessions");
+        let relative_claude = cwd.join("relative-claude/projects");
+        let relative_codex_sessions = cwd.join("relative-codex/sessions");
+        let relative_codex_archived = cwd.join("relative-codex/archived_sessions");
+        for root in [
+            &relative_omp,
+            &relative_claude,
+            &relative_codex_sessions,
+            &relative_codex_archived,
+        ] {
+            fs::create_dir_all(root).expect("create cwd-relative candidate root");
+            fs::write(
+                root.join("V64_RELATIVE_OVERRIDE_FILENAME_SECRET.jsonl"),
+                b"must not scan",
+            )
+            .expect("write cwd-relative decoy candidate");
+        }
+        let mut command = discovery_bin(&noesora_home, &override_home, &cwd);
+        command
+            .env("PI_CODING_AGENT_DIR", "relative-omp")
+            .env("CLAUDE_CONFIG_DIR", "relative-claude")
+            .env("CODEX_HOME", "relative-codex");
+        let (override_out, override_report) =
+            json_output(&mut command, "source discover with relative overrides");
+        assert_discovery_failure(
+            &override_out,
+            &override_report,
+            "source discover with relative overrides",
+        );
+        assert_eq!(override_report["visited_entries"], 0);
+        let override_sources = override_report["sources"]
+            .as_array()
+            .expect("relative-override discovery source rows");
+        assert_eq!(override_sources.len(), 4);
+        for (row, (client, root_type)) in override_sources.iter().zip([
+            ("omp", "sessions"),
+            ("claude-code", "sessions"),
+            ("codex", "sessions"),
+            ("codex", "archived_sessions"),
+        ]) {
+            assert_eq!(row["client"], client);
+            assert_eq!(row["root_type"], root_type);
+            assert_eq!(row["path"], Value::Null);
+            assert_eq!(row["status"], "unsupported_config");
+            assert_eq!(row["jsonl_files"], 0);
+            assert_eq!(row["jsonl_bytes"], 0);
+            assert_eq!(row["compressed_files"], 0);
+            assert_eq!(row["compressed_bytes"], 0);
+            assert_eq!(row["complete"], false);
+            assert!(
+                row["errors"]
+                    .as_array()
+                    .is_some_and(|errors| !errors.is_empty()),
+                "relative override omitted config error: {row}"
+            );
+        }
+        let override_output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&override_out.stdout),
+            String::from_utf8_lossy(&override_out.stderr)
+        );
+        assert!(
+            !override_output.contains("V64_RELATIVE_OVERRIDE_FILENAME_SECRET.jsonl"),
+            "relative override fell back to cwd: {override_output}"
+        );
+        assert!(!noesora_home.exists(), "root-error discovery created Store");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v64_discovery_skips_symlinks_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+        let omp_root = native_home.join(".omp/agent/sessions");
+        fs::create_dir_all(&omp_root).expect("create OMP root");
+        let target = fixture.dir("outside-target");
+        fs::write(
+            target.join("V64_SYMLINK_TARGET_FILENAME_SECRET.jsonl"),
+            b"V64_SYMLINK_TARGET_PAYLOAD_SECRET",
+        )
+        .expect("write symlink target candidate");
+        symlink(&target, omp_root.join("V64_SYMLINK_ENTRY_SECRET")).expect("create symlink entry");
+
+        let (out, report) = json_output(
+            &mut discovery_bin(&noesora_home, &native_home, &cwd),
+            "source discover with symlink entry",
+        );
+        assert_discovery_failure(&out, &report, "source discover with symlink entry");
+        assert_eq!(report["sources"][0]["status"], "incomplete");
+        assert_eq!(report["sources"][0]["jsonl_files"], 0);
+        assert_eq!(report["sources"][0]["jsonl_bytes"], 0);
+        assert_eq!(report["sources"][0]["compressed_files"], 0);
+        assert_eq!(report["sources"][0]["compressed_bytes"], 0);
+        assert_eq!(report["sources"][0]["complete"], false);
+        assert!(
+            report["sources"][0]["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty()),
+            "symlink was not reported as incomplete: {report}"
+        );
+        assert_eq!(report["sources"].as_array().unwrap().len(), 4);
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for forbidden in [
+            "V64_SYMLINK_ENTRY_SECRET",
+            "V64_SYMLINK_TARGET_FILENAME_SECRET.jsonl",
+            "V64_SYMLINK_TARGET_PAYLOAD_SECRET",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "symlink discovery leaked {forbidden}: {rendered}"
+            );
+        }
+        assert!(!noesora_home.exists(), "symlink discovery created Store");
+    }
+    #[test]
+    fn v64_discovery_uses_absolute_client_root_overrides() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let default_omp = native_home.join(".omp/agent/sessions");
+        let default_claude = native_home.join(".claude/projects");
+        let default_codex = native_home.join(".codex/sessions");
+        let default_archived = native_home.join(".codex/archived_sessions");
+        for root in [
+            &default_omp,
+            &default_claude,
+            &default_codex,
+            &default_archived,
+        ] {
+            fs::create_dir_all(root).expect("create default session root");
+            for name in [
+                "V64_DEFAULT_CANARY_ONE.jsonl",
+                "V64_DEFAULT_CANARY_TWO.jsonl",
+            ] {
+                fs::write(root.join(name), b"default root canary")
+                    .expect("write default-root decoy");
+            }
+        }
+
+        let omp_agent_dir = fixture.dir("absolute-omp-agent");
+        let omp_root = omp_agent_dir.join("sessions");
+        let claude_config_dir = fixture.dir("absolute-claude-config");
+        let claude_root = claude_config_dir.join("projects");
+        let codex_home = fixture.dir("absolute-codex-home");
+        let codex_root = codex_home.join("sessions");
+        let archived_root = codex_home.join("archived_sessions");
+        for root in [&omp_root, &claude_root, &codex_root, &archived_root] {
+            fs::create_dir_all(root).expect("create override session root");
+        }
+
+        let omp_bytes = b"absolute OMP override";
+        let claude_bytes = b"absolute Claude override";
+        let codex_bytes = b"absolute Codex override";
+        let archived_bytes = b"absolute archived override";
+        fs::write(omp_root.join("omp-override.jsonl"), omp_bytes)
+            .expect("write OMP override candidate");
+        fs::write(claude_root.join("claude-override.jsonl"), claude_bytes)
+            .expect("write Claude override candidate");
+        fs::write(codex_root.join("codex-override.jsonl"), codex_bytes)
+            .expect("write Codex override candidate");
+        fs::write(
+            archived_root.join("archived-override.jsonl"),
+            archived_bytes,
+        )
+        .expect("write archived Codex override candidate");
+
+        let mut command = discovery_bin(&noesora_home, &native_home, &cwd);
+        command
+            .env("PI_CODING_AGENT_DIR", &omp_agent_dir)
+            .env("CLAUDE_CONFIG_DIR", &claude_config_dir)
+            .env("CODEX_HOME", &codex_home);
+        let (out, report) = json_output(&mut command, "source discover with absolute overrides");
+        assert_success(&out, "source discover with absolute overrides");
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["visited_entries"], 4);
+        assert_eq!(report["sources"].as_array().unwrap().len(), 4);
+
+        for ((client, root_type, root, bytes), row) in [
+            ("omp", "sessions", &omp_root, omp_bytes.as_slice()),
+            (
+                "claude-code",
+                "sessions",
+                &claude_root,
+                claude_bytes.as_slice(),
+            ),
+            ("codex", "sessions", &codex_root, codex_bytes.as_slice()),
+            (
+                "codex",
+                "archived_sessions",
+                &archived_root,
+                archived_bytes.as_slice(),
+            ),
+        ]
+        .into_iter()
+        .zip(report["sources"].as_array().unwrap())
+        {
+            assert_eq!(row["client"], client);
+            assert_eq!(row["root_type"], root_type);
+            assert_eq!(row["path"], root.to_str().expect("UTF-8 override root"));
+            assert_eq!(row["status"], "found");
+            assert_eq!(row["jsonl_files"], 1);
+            assert_eq!(row["jsonl_bytes"], bytes.len() as u64);
+            assert_eq!(row["complete"], true);
+        }
+        assert!(
+            !noesora_home.exists(),
+            "absolute-override discovery created Store"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_honors_omp_profile_precedence_and_empty_default_override() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let selected_profile_root = native_home.join(".omp/profiles/selected/agent/sessions");
+        let pi_profile_root = native_home.join(".omp/profiles/ignored/agent/sessions");
+        let default_root = native_home.join(".omp/agent/sessions");
+        let agent_dir = fixture.dir("absolute-omp-agent");
+        let agent_override_root = agent_dir.join("sessions");
+        for root in [
+            &selected_profile_root,
+            &pi_profile_root,
+            &default_root,
+            &agent_override_root,
+        ] {
+            fs::create_dir_all(root).expect("create OMP profile candidate root");
+        }
+        let selected_profile_bytes = b"selected named profile";
+        fs::write(
+            selected_profile_root.join("selected-profile.jsonl"),
+            selected_profile_bytes,
+        )
+        .expect("write selected-profile candidate");
+        for name in ["ignored-one.jsonl", "ignored-two.jsonl"] {
+            fs::write(pi_profile_root.join(name), b"ignored PI_PROFILE candidate")
+                .expect("write ignored PI_PROFILE candidate");
+            fs::write(default_root.join(name), b"default OMP candidate")
+                .expect("write default OMP candidate");
+        }
+        let override_bytes: [&[u8]; 3] = [b"agent override one", b"two", b"three"];
+        for (index, bytes) in override_bytes.iter().copied().enumerate() {
+            fs::write(
+                agent_override_root.join(format!("override-{index}.jsonl")),
+                bytes,
+            )
+            .expect("write agent override candidate");
+        }
+
+        let mut named_profile = discovery_bin(&noesora_home, &native_home, &cwd);
+        named_profile
+            .env("OMP_PROFILE", "selected")
+            .env("PI_PROFILE", "ignored")
+            .env("PI_CODING_AGENT_DIR", &agent_dir);
+        let (named_out, named_report) =
+            json_output(&mut named_profile, "source discover with named OMP profile");
+        assert_success(&named_out, "source discover with named OMP profile");
+        assert_eq!(
+            named_report["sources"][0]["path"],
+            selected_profile_root.to_str().unwrap()
+        );
+        assert_eq!(named_report["sources"][0]["status"], "found");
+        assert_eq!(named_report["sources"][0]["jsonl_files"], 1);
+        assert_eq!(
+            named_report["sources"][0]["jsonl_bytes"],
+            selected_profile_bytes.len() as u64
+        );
+        assert_eq!(named_report["visited_entries"], 1);
+
+        let mut explicitly_empty_profile = discovery_bin(&noesora_home, &native_home, &cwd);
+        explicitly_empty_profile
+            .env("OMP_PROFILE", "")
+            .env("PI_PROFILE", "ignored")
+            .env("PI_CODING_AGENT_DIR", &agent_dir);
+        let (empty_out, empty_report) = json_output(
+            &mut explicitly_empty_profile,
+            "source discover with explicitly empty OMP profile",
+        );
+        assert_success(
+            &empty_out,
+            "source discover with explicitly empty OMP profile",
+        );
+        assert_eq!(
+            empty_report["sources"][0]["path"],
+            agent_override_root.to_str().unwrap()
+        );
+        assert_eq!(empty_report["sources"][0]["status"], "found");
+        assert_eq!(empty_report["sources"][0]["jsonl_files"], 3);
+        assert_eq!(
+            empty_report["sources"][0]["jsonl_bytes"],
+            override_bytes
+                .iter()
+                .map(|bytes| bytes.len() as u64)
+                .sum::<u64>()
+        );
+        assert_eq!(empty_report["visited_entries"], 3);
+        let mut pi_fallback = discovery_bin(&noesora_home, &native_home, &cwd);
+        pi_fallback
+            .env("PI_PROFILE", "ignored")
+            .env("PI_CODING_AGENT_DIR", &agent_dir);
+        let (fallback_out, fallback_report) =
+            json_output(&mut pi_fallback, "source discover with PI_PROFILE fallback");
+        assert_success(&fallback_out, "source discover with PI_PROFILE fallback");
+        assert_eq!(
+            fallback_report["sources"][0]["path"],
+            pi_profile_root.to_str().unwrap()
+        );
+        assert_eq!(fallback_report["sources"][0]["jsonl_files"], 2);
+        assert_eq!(fallback_report["visited_entries"], 2);
+        assert!(
+            !noesora_home.exists(),
+            "OMP profile discovery created Store"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v64_discovery_rejects_symlinked_home_ancestor_without_counting_target() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let real_home_parent = fixture.dir("real-home-parent");
+        let real_home = real_home_parent.join("home");
+        fs::create_dir(&real_home).expect("create symlink target HOME");
+        let home_alias = fixture.path().join("home-ancestor-alias");
+        symlink(&real_home_parent, &home_alias).expect("create HOME ancestor alias");
+        let home_through_alias = home_alias.join("home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+
+        let target_root = real_home.join(".omp/agent/sessions");
+        fs::create_dir_all(&target_root).expect("create symlink target session root");
+        fs::write(
+            target_root.join("V64_HOME_ANCESTOR_TARGET_FILENAME_SECRET.jsonl"),
+            b"V64_HOME_ANCESTOR_TARGET_PAYLOAD_SECRET",
+        )
+        .expect("write symlink-target candidate");
+
+        let (out, report) = json_output(
+            &mut discovery_bin(&noesora_home, &home_through_alias, &cwd),
+            "source discover through symlinked HOME ancestor",
+        );
+        assert_discovery_failure(
+            &out,
+            &report,
+            "source discover through symlinked HOME ancestor",
+        );
+        assert_eq!(report["sources"][0]["status"], "incomplete");
+        assert_eq!(report["sources"][0]["complete"], false);
+        assert_eq!(report["sources"][0]["jsonl_files"], 0);
+        assert_eq!(report["sources"][0]["jsonl_bytes"], 0);
+        assert_eq!(report["sources"][0]["compressed_files"], 0);
+        assert_eq!(report["sources"][0]["compressed_bytes"], 0);
+        assert_eq!(report["visited_entries"], 0);
+        assert!(
+            report["sources"][0]["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty()),
+            "symlinked HOME ancestor was not reported: {report}"
+        );
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!rendered.contains("V64_HOME_ANCESTOR_TARGET_FILENAME_SECRET.jsonl"));
+        assert!(!rendered.contains("V64_HOME_ANCESTOR_TARGET_PAYLOAD_SECRET"));
+        assert!(
+            !noesora_home.exists(),
+            "symlinked HOME discovery created Store"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_completes_exact_global_entry_budget_but_reports_true_truncation() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+        let roots = [
+            native_home.join(".omp/agent/sessions"),
+            native_home.join(".claude/projects"),
+            native_home.join(".codex/sessions"),
+            native_home.join(".codex/archived_sessions"),
+        ];
+        for root in &roots {
+            fs::create_dir_all(root).expect("create exact-budget root");
+            fs::write(root.join("candidate.jsonl"), b"candidate")
+                .expect("write exact-budget candidate");
+        }
+        let (exact_out, exact) = json_output(
+            discovery_bin(&noesora_home, &native_home, &cwd).args(["--max-entries", "4"]),
+            "source discover at exact global budget",
+        );
+        assert_success(&exact_out, "source discover at exact global budget");
+        assert_eq!(exact["complete"], true);
+        assert_eq!(exact["visited_entries"], 4);
+        for row in exact["sources"].as_array().expect("source rows") {
+            assert_eq!(row["status"], "found");
+            assert_eq!(row["complete"], true);
+            assert_eq!(row["jsonl_files"], 1);
+        }
+        fs::write(roots[0].join("extra.jsonl"), b"extra")
+            .expect("write one candidate beyond the global budget");
+        let (capped_out, capped) = json_output(
+            discovery_bin(&noesora_home, &native_home, &cwd).args(["--max-entries", "4"]),
+            "source discover with one excess entry",
+        );
+        assert_discovery_failure(
+            &capped_out,
+            &capped,
+            "source discover with one excess entry",
+        );
+        assert_eq!(capped["visited_entries"], 4);
+        assert_eq!(capped["sources"].as_array().unwrap().len(), 4);
+        assert!(
+            !noesora_home.exists(),
+            "entry-boundary discovery created Store"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v64_discovery_rejects_ambiguous_unix_double_slash_prefix() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let agent_dir =
+            fs::canonicalize(fixture.dir("agent-override")).expect("canonical fixture agent root");
+        let sessions = agent_dir.join("sessions");
+        fs::create_dir(&sessions).expect("create override sessions root");
+        fs::write(
+            sessions.join("canary.jsonl"),
+            b"must not count ambiguous root",
+        )
+        .expect("write ambiguous-root candidate");
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+        let double_slash = format!("/{}", agent_dir.to_str().unwrap());
+        let (out, report) = json_output(
+            discovery_bin(&noesora_home, &native_home, &cwd)
+                .env("PI_CODING_AGENT_DIR", double_slash),
+            "source discover with ambiguous Unix root prefix",
+        );
+        assert_discovery_failure(
+            &out,
+            &report,
+            "source discover with ambiguous Unix root prefix",
+        );
+        assert_eq!(report["sources"][0]["status"], "unsupported_config");
+        assert_eq!(report["sources"][0]["path"], Value::Null);
+        assert_eq!(report["sources"][0]["jsonl_files"], 0);
+        for row in report["sources"].as_array().unwrap().iter().skip(1) {
+            assert_eq!(row["status"], "missing");
+            assert_eq!(row["complete"], true);
+        }
+        assert!(
+            !noesora_home.exists(),
+            "ambiguous-prefix discovery created Store"
+        );
+    }
+
+    #[test]
+    fn v64_discovery_honors_userprofile_fallback_and_reports_unhandled_omp_modes() {
+        let fixture = Fixture::new();
+        let native_home =
+            fs::canonicalize(fixture.dir("native-home")).expect("canonical fixture native home");
+        let omp_root = native_home.join(".omp/agent/sessions");
+        let claude_root = native_home.join(".claude/projects");
+        for root in [&omp_root, &claude_root] {
+            fs::create_dir_all(root).expect("create fallback candidate root");
+            fs::write(root.join("candidate.jsonl"), b"candidate")
+                .expect("write fallback candidate");
+        }
+        let cwd = fixture.dir("workspace");
+        let noesora_home = fixture.path().join("noesora-home-not-created");
+        let (fallback_out, fallback) = json_output(
+            discovery_bin(&noesora_home, &native_home, &cwd)
+                .env_remove("HOME")
+                .env("USERPROFILE", &native_home),
+            "source discover with USERPROFILE fallback",
+        );
+        assert_success(&fallback_out, "source discover with USERPROFILE fallback");
+        assert_eq!(fallback["sources"][0]["path"], omp_root.to_str().unwrap());
+        assert_eq!(fallback["sources"][0]["jsonl_files"], 1);
+        assert_eq!(fallback["sources"][1]["jsonl_files"], 1);
+        let (custom_out, custom) = json_output(
+            discovery_bin(&noesora_home, &native_home, &cwd)
+                .env_remove("HOME")
+                .env("USERPROFILE", &native_home)
+                .env("PI_CONFIG_DIR", "unsupported-config-mode"),
+            "source discover with unhandled OMP config mode",
+        );
+        assert_discovery_failure(
+            &custom_out,
+            &custom,
+            "source discover with unhandled OMP config mode",
+        );
+        assert_eq!(custom["sources"][0]["status"], "unsupported_config");
+        assert_eq!(custom["sources"][1]["status"], "found");
+        assert_eq!(custom["sources"][1]["jsonl_files"], 1);
+        #[cfg(target_os = "linux")]
+        {
+            let (xdg_out, xdg) = json_output(
+                discovery_bin(&noesora_home, &native_home, &cwd)
+                    .env("XDG_CONFIG_HOME", fixture.dir("xdg-config")),
+                "source discover with unhandled Linux XDG mode",
+            );
+            assert_discovery_failure(
+                &xdg_out,
+                &xdg,
+                "source discover with unhandled Linux XDG mode",
+            );
+            assert_eq!(xdg["sources"][0]["status"], "unsupported_config");
+            assert_eq!(xdg["sources"][1]["jsonl_files"], 1);
+        }
+        assert!(
+            !noesora_home.exists(),
+            "fallback/config discovery created Store"
+        );
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[test]
+fn v64_discovery_reports_unsupported_platform_without_creating_store() {
+    let fixture = Fixture::new();
+    let native_home = fixture.dir("native-home");
+    let cwd = fixture.dir("workspace");
+    let noesora_home = fixture.path().join("noesora-home-not-created");
+    let (out, report) = json_output(
+        discovery_bin(&noesora_home, &native_home, &cwd).args(["--max-entries", "7"]),
+        "source discover on an unsupported platform",
+    );
+    assert_discovery_failure(&out, &report, "source discover on an unsupported platform");
+    assert_eq!(report["visited_entries"], 0);
+    assert_eq!(report["max_entries"], 7);
+    assert_eq!(report["max_depth"], 16);
+    let rows = report["sources"].as_array().expect("source rows");
+    assert_eq!(rows.len(), 4);
+    let expected = [
+        ("omp", "sessions"),
+        ("claude-code", "sessions"),
+        ("codex", "sessions"),
+        ("codex", "archived_sessions"),
+    ];
+    for (row, (client, root_type)) in rows.iter().zip(expected) {
+        assert_eq!(row["client"], client);
+        assert_eq!(row["root_type"], root_type);
+        assert_eq!(row["status"], "unsupported_config");
+        assert_eq!(row["path"], Value::Null);
+        assert_eq!(row["complete"], false);
+        assert_eq!(row["jsonl_files"], 0);
+        assert_eq!(row["jsonl_bytes"], 0);
+        assert_eq!(row["compressed_files"], 0);
+        assert_eq!(row["compressed_bytes"], 0);
+        assert!(row["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty()));
+    }
+    assert!(
+        !noesora_home.exists(),
+        "unsupported discovery created Store"
+    );
 }

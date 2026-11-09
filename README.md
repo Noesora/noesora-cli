@@ -20,7 +20,22 @@ cargo run -- mcp
 
 ## Import and migration
 
-Raw session history has three explicit JSONL adapters: OMP, Claude Code, and Codex. Import one file with its matching client:
+Raw session history has explicit JSONL adapters for OMP, Claude Code, and Codex. Start with metadata-only candidate-root discovery:
+
+```bash
+cargo run -- source discover
+```
+
+Discovery reports candidate roots. It does not register or enable them. It reads root-hint environment variables and filesystem metadata only. The default budget is 100,000 child entries, with a depth limit of 16. It never opens the Noesora Store, reads session payloads or client config files, imports history, or changes registered roots.
+
+Root and child-directory handles anchor the walk. It opens a volume anchor, then each normal path component without following symlinks. Metadata calls stay relative to held directories. It rejects `ParentDir` and unsupported or ambiguous path prefixes. It does not canonicalize configured roots or use ambient child paths. Skipped symlinks make the result incomplete.
+
+Counts are live, non-atomic observations, not a filesystem snapshot. Complete means the walk finished without a reported cap/error, or an optional root was missing. No direct network client runs, but filesystem calls to network-mounted roots can still cause OS traffic. OS/architecture support needs separate runtime evidence.
+
+Counts cover lowercase `.jsonl` and `.zst` files, not valid sessions. Compressed `.zst` files are counted as metadata only and skipped for parsing/import. Caps, unreadable roots, or unsupported configuration yield `complete: false`, JSON `ok: false`, and exit 2. OpenCode, Cursor Agent, and Grok native intake remain unsupported. Discovery runs once; it has no watcher.
+Discovery resolves/scans only on macOS/Linux. Windows and other non-macOS/Linux targets skip resolution and filesystem access. Result: four ordered `unsupported_config` rows (null paths, zero file/byte counts, incomplete, bounded platform errors), JSON `ok: false`/`complete: false`, `visited_entries: 0`, selected `max_entries`, `max_depth: 16`, exit 2. Strict handle-bound Windows discovery remains unfinished; other CLI scope is unchanged.
+
+To import one exact file, provide its full path and matching client:
 
 ```bash
 cargo run -- session import --client omp /path/to/session.jsonl
@@ -28,7 +43,7 @@ cargo run -- session import --client claude-code /path/to/session.jsonl
 cargo run -- session import --client codex /path/to/session.jsonl
 ```
 
-Imports preserve the source file and store raw session history. They do not promote conversations into approved records. For explicitly enabled roots, add a source, inspect configured roots, and run a one-shot sync:
+Imports preserve source files and store raw session history; they do not promote conversations into approved records. For root intake, explicitly add chosen path, inspect its effective state, then run one-shot sync if enabled:
 
 ```bash
 cargo run -- source add --client omp /path/to/session-root
@@ -36,7 +51,7 @@ cargo run -- source list
 cargo run -- sync
 ```
 
-No roots are discovered from the working directory, and sync is not a background watcher. To bring in existing Markdown records, use `cargo run -- import-vault /path/to/old-vault`; it imports records without modifying the originals. This does not select that vault as the CLI store. Existing vaults and session logs are not migrated implicitly.
+Discovery never adds or enables a source, and no root is inferred from working directory. Embedding/indexing is separate; after model setup, run `cargo run -- index`. To bring in existing Markdown records, use `cargo run -- import-vault /path/to/old-vault`; it imports records without modifying originals or selecting that vault as CLI store. Existing vaults and session logs are not migrated implicitly.
 
 ## Cloud and optional two-way sync (source checkout)
 
