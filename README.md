@@ -109,6 +109,8 @@ cargo run -- search "where are credentials stored" --mode semantic
 
 `model install` installs the pinned local embedding model; `index` builds pending embeddings. Semantic search reports whether index coverage is complete. Text search and browsing remain available if the model is unavailable.
 
+If semantic search reports `MODEL_UNAVAILABLE`, inspect local availability with `cargo run -- model status`. Run `cargo run -- model install` only when you choose to install the pinned assets; setup may use the network. Human-readable errors provide these next steps while preserving the original cause and exit code 2. JSON and MCP keep their existing typed errors. Search does not install or download a model automatically; use `--mode text` while model setup is unavailable.
+
 Search Engine failures in `--json` mode return `{"ok":false,"code":"MODEL_UNAVAILABLE","error":"..."}` or `{"ok":false,"code":"SEARCH_FAILED","error":"..."}` and exit with code 2. The first category identifies unavailable semantic-model prerequisites; the second covers other search failures. A healthy no-match refusal remains a successful response, and generic validation errors do not receive an Engine search category.
 
 `query` accepts one read-only `SELECT` or `WITH` statement. Text output is CSV with a header and at most 100 rows; JSON returns `columns`, `rows`, and `truncated`. Capped text output reports the cap on stderr while stdout stays CSV.
