@@ -1036,6 +1036,16 @@ fn fail_search(json_output: bool, err: noesora_engine::SearchError) -> ExitCode 
         println!("{payload}");
         ExitCode::from(2)
     } else {
-        fail(false, err)
+        let model_unavailable = err.code() == "MODEL_UNAVAILABLE";
+        let exit = fail(false, err);
+        if model_unavailable {
+            let _ = writeln!(
+                io::stderr(),
+                "Check local availability: noesora model status\n\
+                 Install pinned assets explicitly: noesora model install (may use network)\n\
+                 Text search remains available with --mode text."
+            );
+        }
+        exit
     }
 }
