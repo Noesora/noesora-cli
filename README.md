@@ -35,13 +35,17 @@ Counts are live, non-atomic observations, not a filesystem snapshot. Complete me
 Counts cover lowercase `.jsonl` and `.zst` files, not valid sessions. Compressed `.zst` files are counted as metadata only and skipped for parsing/import. Caps, unreadable roots, or unsupported configuration yield `complete: false`, JSON `ok: false`, and exit 2. OpenCode, Cursor Agent, and Grok native intake remain unsupported. Discovery runs once; it has no watcher.
 Discovery resolves/scans only on macOS/Linux. Windows and other non-macOS/Linux targets skip resolution and filesystem access. Result: four ordered `unsupported_config` rows (null paths, zero file/byte counts, incomplete, bounded platform errors), JSON `ok: false`/`complete: false`, `visited_entries: 0`, selected `max_entries`, `max_depth: 16`, exit 2. Strict handle-bound Windows discovery remains unfinished; other CLI scope is unchanged.
 
-To import one exact file, provide its full path and matching client:
+Choose one uncompressed native `.jsonl` session file, not a directory. On macOS/Linux, `source discover` previews candidate folders without importing them. Select a file written by the client you pass to `--client`; discovery does not choose or register that file for you.
+
+Import copies the file's full contents into the local archive without redaction. Check for sensitive content before importing. The original stays unchanged. Provide the file's full path and matching client:
 
 ```bash
 cargo run -- session import --client omp /path/to/session.jsonl
 cargo run -- session import --client claude-code /path/to/session.jsonl
 cargo run -- session import --client codex /path/to/session.jsonl
 ```
+
+Text search is available after import. After explicit model setup, run `cargo run -- index` to build pending semantic embeddings.
 
 Imports preserve source files and store raw session history; they do not promote conversations into approved records. For root intake, explicitly add chosen path, inspect its effective state, then run one-shot sync if enabled:
 

@@ -129,9 +129,20 @@ enum Command {
 #[derive(Subcommand)]
 enum SessionCommand {
     /// Explicitly archive one session JSONL file.
+    ///
+    /// Choose one uncompressed native .jsonl session file, not a directory.
+    /// On macOS/Linux, run `noesora source discover` to preview candidate folders,
+    /// then choose the client that created the file.
+    ///
+    /// The original stays unchanged. Full contents are archived locally without
+    /// redaction. Text search is available after import; after explicit model
+    /// setup, `noesora index` builds pending semantic embeddings.
+    ///
+    /// Example: noesora session import --client omp "/path/to/session.jsonl"
     Import {
         #[arg(long, value_enum)]
         client: IntakeClientArg,
+        /// Path to one uncompressed native JSONL session file.
         path: PathBuf,
     },
     /// Ingest one normalized noesora.session/v1 JSONL file.
